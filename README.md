@@ -7,7 +7,6 @@ Uno script completo per **Tampermonkey** progettato per automatizzare la creazio
 
 * 📦 **Importa / Esporta Setup**: Puoi esportare la tua configurazione e le coordinate dell'immagine con un click. Questo ti permette di condividere il progetto con i tuoi amici o di clonarlo su più profili Chrome per avviare sessioni di **Multi-Account** coordinate!
 * 🛒 **Auto-Upgrade Intelligente (Farming)**: Il bot monitora i tuoi soldi (Droplets) e acquista in totale autonomia i potenziamenti del Cooldown e dello Storage non appena raggiungi 500 droplets. (Supporta nativamente l'interfaccia in lingua Inglese e Italiana).
-* 🛡️ **Bypass Anti-Bot**: Gestione integrata e ottimizzata per i captcha/turnstile di Cloudflare.
 * 🎛️ **Strategie di Disegno Multiple**: Modalità di piazzamento pixel dall'alto al basso, spirale, sinistra a destra o casuale. (Perfetto per distribuire il carico su Multi-Account).
 
 ## 🚀 Come Installare e Usare

@@ -2699,7 +2699,7 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
   </div>
   <div class="form">
     <div class="bot-settings-panel" style="display: none; flex-direction: column; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #ffffff1a; margin-bottom: 8px;">
-      <label class="row"><span>Pausa AutoDraw (Minuti, 0=Auto)</span><input type="number" class="draw-threshold" min="0" max="1000" value="0" style="width: 60px;"></label>
+      <label class="row"><span>Soglia Ricariche (0=Auto)</span><input type="number" class="draw-threshold" min="0" max="1000" value="0" style="width: 60px;"></label>
       <label class="row"><span>Strategia</span><select class="strategy">
         <option value="SEQUENTIAL" selected>Sequenziale</option>
         <option value="ALL">Tutti</option>
@@ -3341,6 +3341,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         return this.draw();
       }
       const indexes = new Map;
+      let lastMousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
       const drawTask = async (image) => {
         let index = indexes.get(image);
         if (index === undefined)
@@ -3357,12 +3358,48 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         }
         const halfPixel = worldPosition.pixelSize / 2;
         const position = worldPosition.toScreenPosition();
+        
+        const targetX = position.x + halfPixel;
+        const targetY = position.y + halfPixel;
+
+        // Jitter ritardo iniziale per simulare tempi di reazione umani
+        await wait(Math.random() * 50 + 20);
+
+        // Movimento fluido del mouse (Humanizer)
+        const steps = 10 + Math.floor(Math.random() * 10); // Da 10 a 20 step
+        for (let i = 1; i <= steps; i++) {
+          const t = i / steps;
+          // Easing: easeOutQuad per rallentare verso la fine
+          const easeT = t * (2 - t); 
+          
+          // Leggera curva (deviazione randomica dal percorso lineare)
+          const curveX = Math.sin(t * Math.PI) * (Math.random() * 20 - 10);
+          const curveY = Math.sin(t * Math.PI) * (Math.random() * 20 - 10);
+
+          const stepX = lastMousePos.x + (targetX - lastMousePos.x) * easeT + curveX;
+          const stepY = lastMousePos.y + (targetY - lastMousePos.y) * easeT + curveY;
+
+          document.documentElement.dispatchEvent(new MouseEvent("mousemove", {
+            bubbles: true,
+            clientX: stepX,
+            clientY: stepY,
+            shiftKey: true
+          }));
+          await wait(Math.random() * 5 + 5); // 5-10ms tra i micro-movimenti
+        }
+        
+        // Posizione finale esatta
         document.documentElement.dispatchEvent(new MouseEvent("mousemove", {
           bubbles: true,
-          clientX: position.x + halfPixel,
-          clientY: position.y + halfPixel,
+          clientX: targetX,
+          clientY: targetY,
           shiftKey: true
         }));
+        lastMousePos = { x: targetX, y: targetY };
+
+        // Jitter prima di cliccare
+        await wait(Math.random() * 60 + 30);
+
         document.documentElement.dispatchEvent(new KeyboardEvent("keydown", {
           key: " ",
           code: "Space",
@@ -3371,6 +3408,10 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
           bubbles: true,
           cancelable: true
         }));
+
+        // Jitter del click (quanto tempo tieni premuto il tasto spazio)
+        await wait(Math.random() * 40 + 20);
+
         document.documentElement.dispatchEvent(new KeyboardEvent("keyup", {
           key: " ",
           code: "Space",
@@ -3379,9 +3420,12 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
           bubbles: true,
           cancelable: true
         }));
+
         charges--;
         progress((initialCharges - charges) / initialCharges);
-        await wait(1);
+        
+        // Jitter dopo l'azione, invece del wait fisso a 1
+        await wait(Math.random() * 100 + 50);
         return true;
       };
       switch (this.strategy) {
@@ -3452,18 +3496,28 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
     this.widget.$autoDraw.innerText = "Avvio...";
     addClass(this.widget.element, "running");
     let errorCount = 0;
-    let drawTime = 0;
+    let isDrawing = false;
+    let randomOffset = Math.floor(Math.random() * 5) - 2; // Jitter iniziale tra -2 e +2
     this.autoDrawInterval = setInterval(async () => {
-      const deltaTime = drawTime - Date.now();
-      if (deltaTime > 0)
-        this.widget.$autoDraw.innerText = `Disegno Auto in (${deltaTime / 60000 | 0}:${(deltaTime % 60000 / 1000 | 0).toString().padStart(2, "0")})!`;
-      else {
+      if (isDrawing) return;
+
+      const chargesFloat = this.me?.charges.count ?? 0;
+      const maxCharges = this.me?.charges.max ?? 100;
+      
+      let baseThreshold = this.drawThreshold;
+      if (baseThreshold <= 0) baseThreshold = Math.floor(maxCharges * 0.9);
+      
+      let threshold = baseThreshold + randomOffset;
+      if (threshold > maxCharges) threshold = maxCharges;
+      if (threshold < 1) threshold = 1;
+
+      if (chargesFloat < threshold) {
         const cooldownMs = this.me?.charges.cooldownMs ?? 30000;
-        if (this.drawThreshold > 0) {
-          drawTime = Date.now() + (this.drawThreshold * 60000);
-        } else {
-          drawTime = Date.now() + (this.me?.charges.max ?? 100) * 0.9 * cooldownMs;
-        }
+        const remainingFloat = threshold - chargesFloat;
+        const deltaTime = remainingFloat * cooldownMs;
+        this.widget.$autoDraw.innerText = `Cariche: ${Math.floor(chargesFloat)}/${threshold} (${deltaTime / 60000 | 0}:${(deltaTime % 60000 / 1000 | 0).toString().padStart(2, "0")})`;
+      } else {
+        isDrawing = true;
         try {
           await this.draw();
           document.querySelector(".absolute.bottom-0  .btn.btn-lg.relative.btn-primary")?.click();
@@ -3472,6 +3526,10 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
           errorCount++;
           if (errorCount === 4)
             throw new Error("Error");
+        } finally {
+          isDrawing = false;
+          // Nuovo offset per la prossima attesa (da -2 a +2)
+          randomOffset = Math.floor(Math.random() * 5) - 2;
         }
       }
     }, 1000);
@@ -3665,7 +3723,9 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
     };
   }
 }
-globalThis.wbot = new WPlaceBot(await loadSave());
+loadSave().then(save => {
+  globalThis.wbot = new WPlaceBot(save);
+});
 {
   WPlaceBot
 };

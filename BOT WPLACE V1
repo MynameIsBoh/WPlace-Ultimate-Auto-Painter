@@ -2688,6 +2688,7 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
   <div class="header" title="Trascina per spostare">
     <span class="brand">⚡</span>
     <span class="title">Bot WPlace</span>
+    <button class="open-bot-settings" title="Impostazioni" style="background: none; border: none; font-size: 16px; cursor: pointer; padding: 0 4px;">⚙️</button>
     <button class="minimize" title="Riduci / espandi"></button>
     <button class="close-modal" title="Chiudi">✕</button>
   </div>
@@ -2697,13 +2698,8 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
     <div class="status"></div>
   </div>
   <div class="form">
-    <div class="controls-section">
-      <div class="actions">
-        <button class="draw" disabled>Disegna</button>
-        <button class="auto-draw" disabled>Disegno Auto</button>
-        <button class="export-bot" style="font-size: 11px;">📤 Esporta Setup</button>
-        <button class="import-bot" style="font-size: 11px;">📥 Importa Setup</button>
-      </div>
+    <div class="bot-settings-panel" style="display: none; flex-direction: column; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #ffffff1a; margin-bottom: 8px;">
+      <label class="row"><span>Pausa AutoDraw (Minuti, 0=Auto)</span><input type="number" class="draw-threshold" min="0" max="1000" value="0" style="width: 60px;"></label>
       <label class="row"><span>Strategia</span><select class="strategy">
         <option value="SEQUENTIAL" selected>Sequenziale</option>
         <option value="ALL">Tutti</option>
@@ -2716,6 +2712,14 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
         </div>
         <label><input type="checkbox" class="auto-upgrade-cooldown"> Riduci Cooldown</label>
         <label><input type="checkbox" class="auto-upgrade-storage"> Aumenta Capacità Pixel</label>
+      </div>
+    </div>
+    <div class="controls-section">
+      <div class="actions">
+        <button class="draw" disabled>Disegna</button>
+        <button class="auto-draw" disabled>Disegno Auto</button>
+        <button class="export-bot" style="font-size: 11px;">📤 Esporta Setup</button>
+        <button class="import-bot" style="font-size: 11px;">📥 Importa Setup</button>
       </div>
     </div>
     <div class="section-head">
@@ -2746,6 +2750,9 @@ class Widget extends Base2 {
     else
       removeClass(this.element, "open");
   }
+  $openBotSettings;
+  $botSettingsPanel;
+  $drawThreshold;
   $settings;
   $status;
   $minimize;
@@ -2770,6 +2777,9 @@ class Widget extends Base2 {
     document.body.append(this.element);
     this.populateElementsWithSelector(this.element, {
       $openButton: ".open-button",
+      $openBotSettings: ".open-bot-settings",
+      $botSettingsPanel: ".bot-settings-panel",
+      $drawThreshold: ".draw-threshold",
       $closeModal: ".close-modal",
       $settings: ".form",
       $status: ".status",
@@ -2878,6 +2888,13 @@ class Widget extends Base2 {
     });
     this.$autoDraw.addEventListener("click", () => this.bot.autoDraw());
 
+    this.$openBotSettings.addEventListener("click", () => {
+      this.$botSettingsPanel.style.display = this.$botSettingsPanel.style.display === "none" ? "flex" : "none";
+    });
+    this.$drawThreshold.addEventListener("change", () => {
+      this.bot.drawThreshold = Number(this.$drawThreshold.value) || 0;
+      save(this.bot);
+    });
     this.$autoUpgradeCooldown.addEventListener("change", () => {
       this.bot.autoUpgradeCooldown = this.$autoUpgradeCooldown.checked;
       save(this.bot);
@@ -2976,6 +2993,7 @@ class Widget extends Base2 {
   }
   update() {
     this.$strategy.value = this.bot.strategy;
+    this.$drawThreshold.value = this.bot.drawThreshold.toString();
     this.$autoUpgradeCooldown.checked = this.bot.autoUpgradeCooldown;
     this.$autoUpgradeStorage.checked = this.bot.autoUpgradeStorage;
     let maxTasks = 0;
@@ -3093,11 +3111,12 @@ class WPlaceBot {
   strategy = "SEQUENTIAL" /* SEQUENTIAL */;
   images = [];
   autoDrawInterval;
+  autoUpgradeCooldown = false;
+  autoUpgradeStorage = false;
+  drawThreshold = 0;
   widget = new Widget(this);
   markerPixelPositionResolvers = [];
   lastColor;
-  autoUpgradeCooldown = false;
-  autoUpgradeStorage = false;
   constructor(save2) {
     if (save2) {
       for (let index = 0; index < save2.images.length; index++) {
@@ -3114,6 +3133,7 @@ class WPlaceBot {
       this.strategy = save2.strategy;
       this.autoUpgradeCooldown = save2.autoUpgradeCooldown ?? false;
       this.autoUpgradeStorage = save2.autoUpgradeStorage ?? false;
+      this.drawThreshold = save2.drawThreshold ?? 0;
       this.title = save2.title;
     } else {
       this.title = "WPlace-bot";
@@ -3438,7 +3458,12 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       if (deltaTime > 0)
         this.widget.$autoDraw.innerText = `Disegno Auto in (${deltaTime / 60000 | 0}:${(deltaTime % 60000 / 1000 | 0).toString().padStart(2, "0")})!`;
       else {
-        drawTime = Date.now() + (this.me?.charges.max ?? 100) * 0.9 * 30000;
+        const cooldownMs = this.me?.charges.cooldownMs ?? 30000;
+        if (this.drawThreshold > 0) {
+          drawTime = Date.now() + (this.drawThreshold * 60000);
+        } else {
+          drawTime = Date.now() + (this.me?.charges.max ?? 100) * 0.9 * cooldownMs;
+        }
         try {
           await this.draw();
           document.querySelector(".absolute.bottom-0  .btn.btn-lg.relative.btn-primary")?.click();
@@ -3459,7 +3484,8 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       strategy: this.strategy,
       title: this.title,
       autoUpgradeCooldown: this.autoUpgradeCooldown,
-      autoUpgradeStorage: this.autoUpgradeStorage
+      autoUpgradeStorage: this.autoUpgradeStorage,
+      drawThreshold: this.drawThreshold
     };
   }
   async updateColorsData() {
@@ -3582,7 +3608,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         if (position.pixelSize >= zoom)
           resolve();
         else
-          requestAnimationFrame(scroll);
+          setTimeout(scroll, 100);
         canvas.dispatchEvent(event);
       }
       scroll();
@@ -3604,7 +3630,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         if (position.pixelSize <= zoom)
           resolve();
         else
-          requestAnimationFrame(scroll);
+          setTimeout(scroll, 100);
         canvas.dispatchEvent(event);
       }
       scroll();

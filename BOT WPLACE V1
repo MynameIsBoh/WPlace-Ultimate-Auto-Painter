@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.4.0
+// @version      6.5.0
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -2823,7 +2823,7 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
         <div style="display: flex; justify-content: space-between; align-items: center;">
           <div style="display:flex; align-items:center; gap: 4px;">
             <span class="section-title">Dashboard Multi-Account</span>
-            <button class="mass-toggle-btn" style="font-size: 9px; cursor: pointer; padding: 1px 4px; border: 1px solid var(--wb-border); border-radius: 4px; background: transparent; color: var(--wb-text);">Tutti ON/OFF</button>
+            <button class="mass-toggle-btn" style="font-size: 9px; cursor: pointer; padding: 1px 4px; border: 1px solid var(--wb-border); border-radius: 4px; background: transparent; color: var(--wb-text);">Sel. Tutti</button>
           </div>
           <span class="dashboard-active-count" style="font-size: 11px; color: var(--wb-accent);">0 online</span>
         </div>
@@ -2886,6 +2886,7 @@ class Widget extends Base2 {
   $massToggleBtn;
   $mainView;
   peers = new Map();
+  selectedPeers = new Set();
   syncChannel = new BroadcastChannel('wplace-bot-sync');
   instanceId = Math.random().toString(36).slice(2);
   ws;
@@ -3013,12 +3014,31 @@ class Widget extends Base2 {
       isDragging = false;
     });
 
-    this.$draw.addEventListener("click", () => this.bot.draw());
+    this.$draw.addEventListener("click", () => {
+      this.bot.draw();
+      for (const target of this.selectedPeers) {
+        if (target !== this.instanceId) {
+          const msg = { type: 'command', command: 'draw', target, room: this.bot.syncRoomId };
+          if (this.ws.readyState === 1) this.ws.send(JSON.stringify(msg));
+          this.syncChannel.postMessage(msg);
+        }
+      }
+    });
     this.$addImage.addEventListener("click", () => this.addImage());
     this.$strategy.addEventListener("change", () => {
       this.bot.strategy = this.$strategy.value;
     });
-    this.$autoDraw.addEventListener("click", () => this.bot.autoDraw());
+    this.$autoDraw.addEventListener("click", () => {
+      const isStarting = !this.bot.autoDrawInterval;
+      this.bot.autoDraw();
+      for (const target of this.selectedPeers) {
+        if (target !== this.instanceId) {
+          const msg = { type: 'command', command: 'set-auto', target, room: this.bot.syncRoomId, state: isStarting };
+          if (this.ws.readyState === 1) this.ws.send(JSON.stringify(msg));
+          this.syncChannel.postMessage(msg);
+        }
+      }
+    });
 
     this.$openBotSettings.addEventListener("click", () => {
       if (this.$botSettingsPanel.style.display === "none") {
@@ -3097,27 +3117,24 @@ class Widget extends Base2 {
 
     if (this.$massToggleBtn) {
       this.$massToggleBtn.addEventListener("click", () => {
-         const allActive = Array.from(this.peers.values()).some(p => p.isAutoDrawing) || !!this.bot.autoDrawInterval;
-         const targetState = !allActive;
-         if (!!this.bot.autoDrawInterval !== targetState) this.bot.autoDraw();
-         const msg = { type: 'command', command: 'toggle-auto', target: 'ALL', room: this.bot.syncRoomId, state: targetState };
-         if (this.ws.readyState === 1) this.ws.send(JSON.stringify(msg));
-         this.syncChannel.postMessage(msg);
+         const allBots = Array.from(this.peers.values());
+         allBots.push({id: this.instanceId});
+         const allSelected = allBots.every(b => this.selectedPeers.has(b.id));
+         if (allSelected) {
+           this.selectedPeers.clear();
+         } else {
+           allBots.forEach(b => this.selectedPeers.add(b.id));
+         }
+         this.updateDashboard();
       });
     }
 
     if (this.$dashboardList) {
       this.$dashboardList.addEventListener("change", (e) => {
-        if (e.target.classList.contains("toggle-peer-auto")) {
+        if (e.target.classList.contains("select-peer-chk")) {
           const id = e.target.getAttribute("data-id");
-          const state = e.target.checked;
-          if (id === this.instanceId) {
-              if (!!this.bot.autoDrawInterval !== state) this.bot.autoDraw();
-          } else {
-              const msg = { type: 'command', command: 'toggle-auto', target: id, room: this.bot.syncRoomId, state };
-              if (this.ws.readyState === 1) this.ws.send(JSON.stringify(msg));
-              this.syncChannel.postMessage(msg);
-          }
+          if (e.target.checked) this.selectedPeers.add(id);
+          else this.selectedPeers.delete(id);
         }
       });
     }
@@ -3172,8 +3189,10 @@ class Widget extends Base2 {
           this.peers.set(event.data.id, event.data);
           this.updateDashboard();
         } else if (event.data.type === 'command' && (event.data.target === 'ALL' || event.data.target === this.instanceId)) {
-          if (event.data.command === 'toggle-auto' && !!this.bot.autoDrawInterval !== event.data.state) {
+          if ((event.data.command === 'toggle-auto' || event.data.command === 'set-auto') && !!this.bot.autoDrawInterval !== event.data.state) {
             this.bot.autoDraw();
+          } else if (event.data.command === 'draw') {
+            this.bot.draw();
           }
         }
       }
@@ -3188,8 +3207,10 @@ class Widget extends Base2 {
               this.peers.set(data.id, data);
               this.updateDashboard();
             } else if (data.type === 'command' && (data.target === 'ALL' || data.target === this.instanceId)) {
-              if (data.command === 'toggle-auto' && !!this.bot.autoDrawInterval !== data.state) {
+              if ((data.command === 'toggle-auto' || data.command === 'set-auto') && !!this.bot.autoDrawInterval !== data.state) {
                 this.bot.autoDraw();
+              } else if (data.command === 'draw') {
+                this.bot.draw();
               }
             }
           }
@@ -3274,11 +3295,12 @@ class Widget extends Base2 {
         el.style.fontSize = "11px";
         el.style.color = bot.id === this.instanceId ? "var(--wb-accent)" : "var(--wb-text)";
         
-        const isDrawingStr = bot.isAutoDrawing ? "checked" : "";
+        const isSelected = this.selectedPeers.has(bot.id) ? "checked" : "";
+        const autoStr = bot.isAutoDrawing ? "<span style='color:#10b981;font-weight:bold;'>[AUTO]</span>" : "<span style='color:#ef4444;font-weight:bold;'>[OFF]</span>";
         el.innerHTML = `
           <div style="display:flex; align-items:center; gap:4px;">
-            <input type="checkbox" class="toggle-peer-auto" data-id="${bot.id}" ${isDrawingStr} style="margin:0; width:12px; height:12px; cursor:pointer;">
-            <span>${String(bot.name).substring(0,12)}</span>
+            <input type="checkbox" class="select-peer-chk" data-id="${bot.id}" ${isSelected} style="margin:0; width:12px; height:12px; cursor:pointer;">
+            <span>${String(bot.name).substring(0,12)} ${autoStr}</span>
           </div>
           <span>⚡ ${bot.charges}/${bot.maxCharges}</span>`;
         this.$dashboardList.appendChild(el);

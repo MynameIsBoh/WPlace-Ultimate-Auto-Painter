@@ -17,11 +17,31 @@ Uno script completo per **Tampermonkey** progettato per automatizzare la creazio
 4. Apri [WPlace.live](https://wplace.live/) e goditi il pannello laterale del bot!
 
 ## 🤝 Multi-Account Guide
-Per disegnare la stessa immagine 5 volte più veloce:
-1. Imposta la tua immagine, le coordinate e le impostazioni.
+Per disegnare la stessa immagine molto più velocemente, puoi far collaborare più bot insieme (su più profili/browser/computer).
+
+**La Dashboard di Sincronizzazione è automatica!** 
+Il bot usa un server pubblico impostato di base (`wss://wplace-ultimate-auto-painter.onrender.com`) per far parlare i bot tra loro in modo invisibile e privato.
+
+### 👥 Come creare una stanza privata per i tuoi bot:
+1. Imposta la tua immagine e le coordinate su un account.
 2. Premi **"Esporta"** dal menu del bot (scaricherai un piccolo file di testo).
-3. Apri 4 nuovi Profili Chrome (loggati con altri account a Wplace).
-4. Su ogni account premi **"Importa"** e carica il file.
-5. **TRUCCO:** Assicurati di cambiare la **"Strategia"** su ogni account (es. uno *Dall'alto*, uno *Dal basso*, uno *Destra*, ecc...) per evitare che i bot provino a piazzare gli stessi pixel sprecando energia!
+3. Apri nuovi Profili Chrome o manda il setup ai tuoi amici.
+4. Su ogni nuovo bot premi **"Importa"** e carica il file.
+5. Nelle impostazioni del bot, fai clic sulla matita ✏️ vicino a **"Multi-Account Sync ID"**.
+6. Scegli un codice segreto a caso (es. `SQUADRA-ALPHA`) e scrivilo in tutti i tuoi bot, premendo poi la spunta ✅ per salvare.
+7. Fatto! I bot nella stessa stanza si vedranno tra loro nella Dashboard calcolando i pixel mancanti totali!
+
+**TRUCCO:** Assicurati di cambiare la **"Strategia"** su ogni account (es. uno *Dall'alto*, uno *Dal basso*, uno *Destra*, ecc...) per evitare che i bot provino a piazzare gli stessi pixel sprecando energia!
+
+---
+
+### 🖥️ (Avanzato) Ospitare il proprio Server Privato
+Se il server di default dovesse risultare lento perché ci sono troppe persone connesse contemporaneamente, puoi avviare il tuo server personale a costo zero:
+1. Registrati su [Render.com](https://render.com).
+2. Crea un nuovo **Web Service** e collegalo a un fork di questa repository su GitHub.
+3. In **Root Directory** scrivi: `dashboard-server`
+4. In **Build Command** scrivi: `npm install`
+5. In **Start Command** scrivi: `node server.js`
+6. Una volta avviato, copia l'URL che ti dà Render (aggiungendo `wss://` all'inizio invece di `https://`) e incollalo nel bot alla voce **"WebSocket Server URL"**.
 
 

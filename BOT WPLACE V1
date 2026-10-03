@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.1.1
+// @version      6.1.2
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -3353,7 +3353,7 @@ class WPlaceBot {
   drawThreshold = 0;
   drawTime = 0;
   syncRoomId = "";
-  wsServerUrl = "ws://localhost:8080";
+  wsServerUrl = "wss://wplace-ultimate-auto-painter.onrender.com";
   widget;
   markerPixelPositionResolvers = [];
   lastColor;
@@ -3375,7 +3375,7 @@ class WPlaceBot {
       this.autoUpgradeStorage = save2.autoUpgradeStorage ?? false;
       this.drawThreshold = save2.drawThreshold ?? 0;
       this.syncRoomId = save2.syncRoomId || "";
-      this.wsServerUrl = save2.wsServerUrl || "ws://localhost:8080";
+      this.wsServerUrl = save2.wsServerUrl || "wss://wplace-ultimate-auto-painter.onrender.com";
       this.title = save2.title;
     } else {
       this.title = "WPlace-bot";

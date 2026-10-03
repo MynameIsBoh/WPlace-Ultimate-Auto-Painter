@@ -12,8 +12,8 @@ Uno script completo per **Tampermonkey** progettato per automatizzare la creazio
 ## 🚀 Come Installare e Usare
 
 1. Installa l'estensione **[Tampermonkey](https://www.tampermonkey.net/)** sul tuo browser (Chrome, Firefox, Edge, Opera).
-2. Scarica o copia il codice del file `BOT WPLACE V1` in un nuovo script di Tampermonkey.
-3. Assicurati che lo script sia abilitato.
+2. **[Installa lo script da GreasyFork cliccando qui](https://greasyfork.org/en/scripts/598439-wplace-ultimate-auto-painter)** (scelta consigliata, ti permetterà di ricevere gli aggiornamenti in automatico!) oppure copia manualmente il codice del file `BOT WPLACE V1` in un nuovo script.
+3. Assicurati che lo script sia abilitato in Tampermonkey.
 4. Apri [WPlace.live](https://wplace.live/) e goditi il pannello laterale del bot!
 
 ## 🤝 Multi-Account Guide

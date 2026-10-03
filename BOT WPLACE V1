@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.5.0
+// @version      6.6.0
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -313,6 +313,7 @@ var image_default = `<div class="topbar">
   <input type="text" class="name">
   <button class="open-settings" title="Apri impostazioni">✏️</button>
   <button class="export" title="Esporta immagine">📤</button>
+  <button class="visibility" title="Mostra/Nascondi immagine">👁️</button>
   <button class="lock" title="Blocca/Sblocca movimento immagine">🔓</button>
   <button class="delete" title="Rimuovi immagine dal bot">❌</button>
 </div>
@@ -1335,6 +1336,7 @@ class BotImage extends Base2 {
   $drawColorsInOrder;
   $drawTransparent;
   $export;
+  $visibility;
   $lock;
   $opacity;
   $progressLine;
@@ -1368,6 +1370,7 @@ class BotImage extends Base2 {
     this.disabledColors = disabledColors;
     this.lock = lock;
     this.disabled = disabled;
+    this.hidden = false;
     this.name = name;
     this.unownedColorStrategy = unownedColorStrategy;
     this.bot.images.push(this);
@@ -1383,6 +1386,7 @@ class BotImage extends Base2 {
       $drawColorsInOrder: ".draw-colors-in-order",
       $drawTransparent: ".draw-transparent",
       $export: ".export",
+      $visibility: ".visibility",
       $lock: ".lock",
       $opacity: ".opacity",
       $progressLine: ".progress div",
@@ -1446,6 +1450,11 @@ class BotImage extends Base2 {
       this.drawColorsInOrder = this.$drawColorsInOrder.checked;
       this.updateColors();
       save(this.bot);
+    });
+    this.$visibility.addEventListener("click", () => {
+      this.hidden = !this.hidden;
+      this.$visibility.textContent = this.hidden ? "🙈" : "👁️";
+      this.updateUI();
     });
     this.$lock.addEventListener("click", () => {
       this.lock = !this.lock;
@@ -1559,7 +1568,7 @@ class BotImage extends Base2 {
     this.element.style.transform = `translate(${x}px, ${y}px)`;
     this.element.style.width = `${this.position.pixelSize * this.width}px`;
     this.$wrapper.style.opacity = this.disabled ? "0.4" : "1";
-    this.$canvas.style.opacity = `${this.opacity}%`;
+    this.$canvas.style.opacity = this.hidden ? "0" : `${this.opacity}%`;
     removeClass(this.element, "hidden");
     this.$resetSizeSpan.textContent = this.width.toString();
     this.$brightness.valueAsNumber = this.brightness;
@@ -2785,27 +2794,35 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
         <option value="ALL">Tutti</option>
         <option value="PERCENTAGE">Percentuale</option>
       </select></label>
-      <div class="row" style="flex-direction: column; gap: 8px; align-items: flex-start;">
-        <div class="row" style="width: 100%; justify-content: space-between;">
-          <span class="section-title">Potenziamenti Auto</span>
-          <button class="test-upgrade-btn" style="padding: 2px 8px; cursor: pointer; border-radius: 4px; border: 1px solid #11b811; background: #000; color: #11b811; font-weight: bold; margin-bottom: 4px;">Test (500💧)</button>
-        </div>
-        <label><input type="checkbox" class="auto-upgrade-cooldown"> Riduci Cooldown</label>
-        <label><input type="checkbox" class="auto-upgrade-storage"> Aumenta Capacità Pixel</label>
-        <div class="row" style="margin-top: 4px; justify-content: space-between; width: 100%;">
-          <span>Multi-Account Sync ID:</span>
-          <div style="display: flex; gap: 4px;">
-            <input type="text" class="sync-room-id" style="width: 80px; padding: 2px; text-align: center;" readonly>
-            <button class="edit-sync-id" style="cursor:pointer; font-size: 10px; padding: 2px;">✏️</button>
-            <button class="save-sync-id" style="cursor:pointer; display:none; font-size: 10px; padding: 2px;">✅</button>
+      <div class="row" style="flex-direction: column; gap: 8px; align-items: flex-start; padding: 0; border: none;">
+        <!-- Gruppo Potenziamenti -->
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-surface); width: 100%;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span class="section-title" style="margin:0; border:none; padding:0;">Potenziamenti Auto</span>
+            <button class="test-upgrade-btn" style="padding: 2px 8px; cursor: pointer; border-radius: 4px; border: 1px solid #11b811; background: #000; color: #11b811; font-weight: bold;">Test (500💧)</button>
           </div>
+          <label><input type="checkbox" class="auto-upgrade-cooldown"> Riduci Cooldown</label>
+          <label><input type="checkbox" class="auto-upgrade-storage"> Aumenta Capacità Pixel</label>
         </div>
-        <div class="row" style="margin-top: 4px; justify-content: space-between; width: 100%;">
-          <span>WebSocket Server URL:</span>
-          <div style="display: flex; gap: 4px;">
-            <input type="text" class="ws-server-url" style="width: 140px; padding: 2px; text-align: center;" readonly>
-            <button class="edit-ws-url" style="cursor:pointer; font-size: 10px; padding: 2px;">✏️</button>
-            <button class="save-ws-url" style="cursor:pointer; display:none; font-size: 10px; padding: 2px;">✅</button>
+        
+        <!-- Gruppo Rete / Multi-Account -->
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-surface); width: 100%;">
+          <span class="section-title" style="margin:0; border:none; padding:0;">Rete & Sincronizzazione</span>
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <span>Sync ID:</span>
+            <div style="display: flex; gap: 4px;">
+              <input type="text" class="sync-room-id" style="width: 80px; padding: 2px; text-align: center; background: rgba(255,255,255,0.05); color: var(--wb-text); border: 1px solid var(--wb-border); border-radius: 4px;" readonly>
+              <button class="edit-sync-id" style="cursor:pointer; font-size: 10px; padding: 2px;">✏️</button>
+              <button class="save-sync-id" style="cursor:pointer; display:none; font-size: 10px; padding: 2px;">✅</button>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <span>Server WebSocket:</span>
+            <div style="display: flex; gap: 4px;">
+              <input type="text" class="ws-server-url" style="width: 140px; padding: 2px; text-align: center; background: rgba(255,255,255,0.05); color: var(--wb-text); border: 1px solid var(--wb-border); border-radius: 4px;" readonly>
+              <button class="edit-ws-url" style="cursor:pointer; font-size: 10px; padding: 2px;">✏️</button>
+              <button class="save-ws-url" style="cursor:pointer; display:none; font-size: 10px; padding: 2px;">✅</button>
+            </div>
           </div>
         </div>
       </div>

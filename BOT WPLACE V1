@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.3.0
+// @version      6.4.0
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -13,6 +13,36 @@
 
 // Wplace  --> https://wplace.live
 // License --> https://www.mozilla.org/en-US/MPL/2.0/
+
+// --- Anti-Throttling per Browser Minimizzato ---
+const _workerBlob = new Blob([`
+  let intervals = {};
+  self.onmessage = function(e) {
+    if (e.data.command === 'set') {
+      intervals[e.data.id] = setInterval(() => self.postMessage(e.data.id), e.data.timeout);
+    } else if (e.data.command === 'clear') {
+      clearInterval(intervals[e.data.id]);
+      delete intervals[e.data.id];
+    }
+  };
+`], { type: "text/javascript" });
+const _timerWorker = new Worker(URL.createObjectURL(_workerBlob));
+let _timerCounter = 0;
+const _timerCallbacks = {};
+_timerWorker.onmessage = (e) => {
+  if (_timerCallbacks[e.data]) _timerCallbacks[e.data]();
+};
+const workerSetInterval = (callback, timeout) => {
+  const id = ++_timerCounter;
+  _timerCallbacks[id] = callback;
+  _timerWorker.postMessage({ command: 'set', id, timeout });
+  return id;
+};
+const workerClearInterval = (id) => {
+  _timerWorker.postMessage({ command: 'clear', id });
+  delete _timerCallbacks[id];
+};
+// ----------------------------------------------
 
 // node_modules/@softsky/utils/dist/arrays.js
 function swap(array, index, index2) {
@@ -3115,7 +3145,7 @@ class Widget extends Base2 {
     this.update();
 
     // Timer per l'ETA della ricarica
-    setInterval(() => {
+    workerSetInterval(() => {
       if (this.bot.me) {
         const charges = Math.floor(this.bot.me.charges.count ?? 0);
         const max = this.bot.me.charges.max ?? 100;
@@ -3168,7 +3198,7 @@ class Widget extends Base2 {
     };
     bindWs();
 
-    setInterval(() => {
+    workerSetInterval(() => {
       if (this.ws.readyState === 3 || this.ws.readyState === 2) {
         this.ws = new WebSocket(this.bot.wsServerUrl);
         bindWs();
@@ -3513,7 +3543,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
     });
 
     // Independent Auto-Upgrade Loop
-    setInterval(async () => {
+    workerSetInterval(async () => {
       if (this.isUpgrading) return;
       if (!this.autoUpgradeCooldown && !this.autoUpgradeStorage) return;
       if (!this.me || this.me.droplets < 500) return;
@@ -3809,7 +3839,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
     if (this.autoDrawInterval) {
       this.widget.$autoDraw.innerText = "Disegno Auto";
       removeClass(this.widget.element, "running");
-      clearInterval(this.autoDrawInterval);
+      workerClearInterval(this.autoDrawInterval);
       this.autoDrawInterval = undefined;
       return false;
     }
@@ -3817,7 +3847,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
     addClass(this.widget.element, "running");
     let errorCount = 0;
     this.drawTime = 0;
-    this.autoDrawInterval = setInterval(async () => {
+    this.autoDrawInterval = workerSetInterval(async () => {
       const deltaTime = this.drawTime - Date.now();
       if (deltaTime > 0)
         this.widget.$autoDraw.innerText = `Disegno Auto in (${deltaTime / 60000 | 0}:${(deltaTime % 60000 / 1000 | 0).toString().padStart(2, "0")})!`;

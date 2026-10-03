@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.0.2
+// @version      6.1.1
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -316,6 +316,7 @@ var image_default = `<div class="topbar">
         <option value="RIGHT">Da sinistra a destra</option>
         <option value="SPIRAL_FROM_CENTER">Spirale verso l'esterno</option>
         <option value="SPIRAL_TO_CENTER" selected>Spirale verso l'interno</option>
+        <option value="BORDERS_TO_CENTER">Bordi verso l'interno</option>
       </select>
     </label>
     <button class="reset-size">Ripristina dimensione [<span></span>px]</button>
@@ -843,7 +844,7 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
         skipColors.add(drawColor);
       colorsOrderMap.set(drawColor, index);
     }
-    const positions = strategyPosition(strategy, height, width);
+    const positions = strategyPosition(strategy, height, width, pixels2);
     const tasks = [];
     lastProgress = 0;
     for (let index = 0;index < positions.length; index += 2) {
@@ -888,7 +889,7 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
       pixels: pixels2
     }, [taskPositions.buffer, pixels2.buffer]);
   }
-  function strategyPosition(strategy, height, width) {
+  function strategyPosition(strategy, height, width, pixels = null) {
     const SIZE = width * height;
     const result = new Uint16Array(SIZE * 2);
     let index = 0;
@@ -983,6 +984,55 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
             }
             left++;
           }
+        }
+        break;
+      }
+      case "BORDERS_TO_CENTER" /* BORDERS_TO_CENTER */: {
+        const dist = new Int32Array(SIZE);
+        dist.fill(2147483647);
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const i = y * width + x;
+            if (pixels && pixels[i] === 0) {
+              dist[i] = 0;
+            } else if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+              dist[i] = 1;
+            }
+          }
+        }
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const i = y * width + x;
+            if (dist[i] === 0) continue;
+            let minD = dist[i];
+            if (x > 0) minD = Math.min(minD, dist[i - 1] + 1);
+            if (y > 0) minD = Math.min(minD, dist[i - width] + 1);
+            if (x > 0 && y > 0) minD = Math.min(minD, dist[i - width - 1] + 1);
+            if (x < width - 1 && y > 0) minD = Math.min(minD, dist[i - width + 1] + 1);
+            dist[i] = minD;
+          }
+        }
+        for (let y = height - 1; y >= 0; y--) {
+          for (let x = width - 1; x >= 0; x--) {
+            const i = y * width + x;
+            let minD = dist[i];
+            if (x < width - 1) minD = Math.min(minD, dist[i + 1] + 1);
+            if (y < height - 1) minD = Math.min(minD, dist[i + width] + 1);
+            if (x < width - 1 && y < height - 1) minD = Math.min(minD, dist[i + width + 1] + 1);
+            if (x > 0 && y < height - 1) minD = Math.min(minD, dist[i + width - 1] + 1);
+            dist[i] = minD;
+          }
+        }
+        const pts = new Array(SIZE);
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            pts[y * width + x] = { x, y, d: dist[y * width + x] };
+          }
+        }
+        pts.sort((a, b) => a.d - b.d);
+        for (let i = 0; i < SIZE; i++) {
+          result[i * 2] = pts[i].x;
+          result[i * 2 + 1] = pts[i].y;
         }
         break;
       }
@@ -2712,6 +2762,22 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
         </div>
         <label><input type="checkbox" class="auto-upgrade-cooldown"> Riduci Cooldown</label>
         <label><input type="checkbox" class="auto-upgrade-storage"> Aumenta Capacità Pixel</label>
+        <div class="row" style="margin-top: 4px; justify-content: space-between; width: 100%;">
+          <span>Multi-Account Sync ID:</span>
+          <div style="display: flex; gap: 4px;">
+            <input type="text" class="sync-room-id" style="width: 80px; padding: 2px; text-align: center;" readonly>
+            <button class="edit-sync-id" style="cursor:pointer; font-size: 10px; padding: 2px;">✏️</button>
+            <button class="save-sync-id" style="cursor:pointer; display:none; font-size: 10px; padding: 2px;">✅</button>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 4px; justify-content: space-between; width: 100%;">
+          <span>WebSocket Server URL:</span>
+          <div style="display: flex; gap: 4px;">
+            <input type="text" class="ws-server-url" style="width: 140px; padding: 2px; text-align: center;" readonly>
+            <button class="edit-ws-url" style="cursor:pointer; font-size: 10px; padding: 2px;">✏️</button>
+            <button class="save-ws-url" style="cursor:pointer; display:none; font-size: 10px; padding: 2px;">✅</button>
+          </div>
+        </div>
       </div>
     </div>
     <div class="controls-section">
@@ -2720,6 +2786,16 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
         <button class="auto-draw" disabled>Disegno Auto</button>
         <button class="export-bot" style="font-size: 11px;">📤 Esporta Setup</button>
         <button class="import-bot" style="font-size: 11px;">📥 Importa Setup</button>
+      </div>
+    </div>
+    <div class="multi-account-dashboard" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-surface); margin-bottom: 8px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="section-title">Dashboard Multi-Account</span>
+        <span class="dashboard-active-count" style="font-size: 11px; color: var(--wb-accent);">0 online</span>
+      </div>
+      <div class="dashboard-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 80px; overflow-y: auto;"></div>
+      <div style="font-size: 11px; margin-top: 4px; border-top: 1px solid var(--wb-border); padding-top: 4px;">
+        <span style="color: var(--wb-text-dim);">ETA Globale:</span> <span class="dashboard-eta">Calcolo...</span>
       </div>
     </div>
     <div class="section-head">
@@ -2769,9 +2845,17 @@ class Widget extends Base2 {
   $closeModal;
   $exportBot;
   $importBot;
+  $dashboardActiveCount;
+  $dashboardList;
+  $dashboardEta;
+  peers = new Map();
+  syncChannel = new BroadcastChannel('wplace-bot-sync');
+  instanceId = Math.random().toString(36).slice(2);
+  ws;
   constructor(bot) {
     super();
     this.bot = bot;
+    this.ws = new WebSocket(this.bot.wsServerUrl);
     addClass(this.element, "widget");
     this.element.innerHTML = obfucsateHTML(widget_default);
     document.body.append(this.element);
@@ -2798,7 +2882,16 @@ class Widget extends Base2 {
       $autoUpgradeStorage: ".auto-upgrade-storage",
       $testUpgradeBtn: ".test-upgrade-btn",
       $exportBot: ".export-bot",
-      $importBot: ".import-bot"
+      $importBot: ".import-bot",
+      $dashboardActiveCount: ".dashboard-active-count",
+      $dashboardList: ".dashboard-list",
+      $dashboardEta: ".dashboard-eta",
+      $syncRoomId: ".sync-room-id",
+      $editSyncId: ".edit-sync-id",
+      $saveSyncId: ".save-sync-id",
+      $wsServerUrl: ".ws-server-url",
+      $editWsUrl: ".edit-ws-url",
+      $saveWsUrl: ".save-ws-url"
     });
     let isBtnDragging = false;
     let btnStartX = 0, btnStartY = 0, btnInitialLeft = 0, btnInitialTop = 0;
@@ -2909,6 +3002,42 @@ class Widget extends Base2 {
       }
     });
 
+    if(this.$editSyncId) {
+      this.$editSyncId.addEventListener("click", () => {
+        this.$syncRoomId.removeAttribute("readonly");
+        this.$syncRoomId.focus();
+        this.$editSyncId.style.display = "none";
+        this.$saveSyncId.style.display = "inline-block";
+      });
+      this.$saveSyncId.addEventListener("click", async () => {
+        this.$syncRoomId.setAttribute("readonly", "true");
+        this.$editSyncId.style.display = "inline-block";
+        this.$saveSyncId.style.display = "none";
+        
+        this.bot.syncRoomId = this.$syncRoomId.value.trim();
+        await save(this.bot, true);
+        document.location.reload();
+      });
+    }
+
+    if(this.$editWsUrl) {
+      this.$editWsUrl.addEventListener("click", () => {
+        this.$wsServerUrl.removeAttribute("readonly");
+        this.$wsServerUrl.focus();
+        this.$editWsUrl.style.display = "none";
+        this.$saveWsUrl.style.display = "inline-block";
+      });
+      this.$saveWsUrl.addEventListener("click", async () => {
+        this.$wsServerUrl.setAttribute("readonly", "true");
+        this.$editWsUrl.style.display = "inline-block";
+        this.$saveWsUrl.style.display = "none";
+        
+        this.bot.wsServerUrl = this.$wsServerUrl.value.trim();
+        await save(this.bot, true);
+        document.location.reload();
+      });
+    }
+
     this.$exportBot.addEventListener("click", async () => {
       const a = document.createElement("a");
       document.body.append(a);
@@ -2961,7 +3090,115 @@ class Widget extends Base2 {
       }
     }, 1000);
 
+    this.bot.syncRoomId = this.bot.syncRoomId || Math.random().toString(36).slice(2, 8).toUpperCase();
+    if(this.$syncRoomId) this.$syncRoomId.value = this.bot.syncRoomId;
+    if(this.$wsServerUrl) this.$wsServerUrl.value = this.bot.wsServerUrl;
+    
+    this.syncChannel.onmessage = (event) => {
+      if (event.data && event.data.type === 'sync' && event.data.room === this.bot.syncRoomId) {
+        this.peers.set(event.data.id, event.data);
+        this.updateDashboard();
+      }
+    };
+
+    const bindWs = () => {
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.type === 'sync' && data.room === this.bot.syncRoomId) {
+            this.peers.set(data.id, data);
+            this.updateDashboard();
+          }
+        } catch (e) {}
+      };
+    };
+    bindWs();
+
+    setInterval(() => {
+      if (this.ws.readyState === 3 || this.ws.readyState === 2) {
+        this.ws = new WebSocket(this.bot.wsServerUrl);
+        bindWs();
+      }
+
+      let remainingTasks = 0;
+      for (let index = 0; index < this.bot.images.length; index++) {
+        if (!this.bot.images[index].disabled) remainingTasks += this.bot.images[index].tasks.length / 2;
+      }
+      const msg = {
+        type: 'sync',
+        id: this.instanceId,
+        room: this.bot.syncRoomId,
+        name: this.bot.me?.name || this.bot.me?.id || "Ospite",
+        charges: Math.floor(this.bot.me?.charges?.count || 0),
+        maxCharges: this.bot.me?.charges?.max || 100,
+        cooldownMs: this.bot.me?.charges?.cooldownMs || 30000,
+        tasks: remainingTasks,
+        timestamp: Date.now()
+      };
+      
+      if (this.ws.readyState === 1) {
+          this.ws.send(JSON.stringify(msg));
+      }
+      this.syncChannel.postMessage(msg);
+
+      const now = Date.now();
+      for (const [id, peer] of this.peers.entries()) {
+        if (now - peer.timestamp > 15000) {
+          this.peers.delete(id);
+        }
+      }
+      this.updateDashboard();
+    }, 2000);
+
     this.open = true;
+  }
+  updateDashboard() {
+    if (!this.$dashboardList) return;
+    const allBots = Array.from(this.peers.values());
+    let remainingTasks = 0;
+    for (let index = 0; index < this.bot.images.length; index++) {
+        if (!this.bot.images[index].disabled) remainingTasks += this.bot.images[index].tasks.length / 2;
+    }
+    const mePeer = {
+        id: this.instanceId,
+        name: this.bot.me?.name || this.bot.me?.id || "Ospite",
+        charges: Math.floor(this.bot.me?.charges?.count || 0),
+        maxCharges: this.bot.me?.charges?.max || 100,
+        cooldownMs: this.bot.me?.charges?.cooldownMs || 30000,
+        tasks: remainingTasks,
+        timestamp: Date.now()
+    };
+    allBots.push(mePeer);
+    
+    this.$dashboardActiveCount.innerText = `${allBots.length} online`;
+    this.$dashboardList.innerHTML = "";
+    
+    let totalCharges = 0;
+    let totalRegenPerMinute = 0;
+    
+    for (const bot of allBots) {
+        totalCharges += bot.charges;
+        const regenMs = bot.cooldownMs || 30000;
+        totalRegenPerMinute += (60000 / regenMs);
+        
+        const el = document.createElement("div");
+        el.style.display = "flex";
+        el.style.justifyContent = "space-between";
+        el.style.fontSize = "11px";
+        el.style.color = bot.id === this.instanceId ? "var(--wb-accent)" : "var(--wb-text)";
+        el.innerHTML = `<span>${String(bot.name).substring(0,12)}</span> <span>⚡ ${bot.charges}/${bot.maxCharges}</span>`;
+        this.$dashboardList.appendChild(el);
+    }
+    
+    const missingTasks = remainingTasks - totalCharges;
+    if (missingTasks <= 0) {
+        this.$dashboardEta.innerText = "Pronto / Finito";
+    } else {
+        const minutes = missingTasks / totalRegenPerMinute;
+        const h = Math.floor(minutes / 60);
+        const m = Math.floor(minutes % 60);
+        this.$dashboardEta.innerText = `${h}h ${m}m (${remainingTasks} px rimasti)`;
+    }
   }
   addImage() {
     this.setDisabled("add-image", true);
@@ -3114,7 +3351,10 @@ class WPlaceBot {
   autoUpgradeCooldown = false;
   autoUpgradeStorage = false;
   drawThreshold = 0;
-  widget = new Widget(this);
+  drawTime = 0;
+  syncRoomId = "";
+  wsServerUrl = "ws://localhost:8080";
+  widget;
   markerPixelPositionResolvers = [];
   lastColor;
   constructor(save2) {
@@ -3134,10 +3374,15 @@ class WPlaceBot {
       this.autoUpgradeCooldown = save2.autoUpgradeCooldown ?? false;
       this.autoUpgradeStorage = save2.autoUpgradeStorage ?? false;
       this.drawThreshold = save2.drawThreshold ?? 0;
+      this.syncRoomId = save2.syncRoomId || "";
+      this.wsServerUrl = save2.wsServerUrl || "ws://localhost:8080";
       this.title = save2.title;
     } else {
       this.title = "WPlace-bot";
     }
+    
+    this.widget = new Widget(this);
+    
     this.registerFetchInterceptor();
     const style = document.createElement("style");
     style.textContent = obfuscateCSS(style_default.replace("FAKE_FAVORITE_LOCATIONS", FAVORITE_LOCATIONS.length.toString()));
@@ -3230,21 +3475,29 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       }
 
       let bought = false;
-      const findAndClickUpgrade = (keywords) => {
+      const findAndClickUpgrade = (keywords, excludeKeywords = []) => {
         const leafEls = Array.from(document.querySelectorAll("*")).filter(el => el.children.length === 0);
         for (const el of leafEls) {
           const text = (el.innerText || el.textContent || "").toLowerCase();
-          if (keywords.some(k => text.includes(k))) {
+          if (keywords.some(k => text.includes(k)) && !excludeKeywords.some(e => text.includes(e))) {
             let curr = el;
             for (let i = 0; i < 6 && curr; i++) {
-              // Cerca solo i bottoni principali (esclude i badge dell'header)
-              const btn = Array.from(curr.querySelectorAll("button.btn-primary, button.bg-blue-500, button.btn")).find(b => {
+              // Cerca i bottoni all'interno dell'elemento corrente
+              const btns = Array.from(curr.querySelectorAll("button.btn-primary, button.bg-blue-500, button.btn")).filter(b => {
                 const t = (b.innerText || b.textContent || "").toLowerCase();
                 return t.includes("droplet") || t.includes("💧");
               });
-              if (btn && !btn.disabled) {
-                btn.click();
-                return true;
+              
+              if (btns.length === 1) {
+                // Abbiamo trovato esattamente il bottone di questo upgrade
+                if (!btns[0].disabled) {
+                  btns[0].click();
+                  return true;
+                }
+                break; // Bottone trovato ma disabilitato, inutile salire ancora
+              } else if (btns.length > 1) {
+                // Siamo saliti troppo e abbiamo trovato tutto il negozio, fermati!
+                break;
               }
               curr = curr.parentElement;
             }
@@ -3253,14 +3506,16 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         return false;
       };
 
-      if (this.autoUpgradeCooldown) bought = findAndClickUpgrade(["ricarica", "recharge", "cooldown", "speed", "+30 paint"]) || bought;
-      if (this.autoUpgradeStorage) bought = findAndClickUpgrade(["massime", "maximum", "capacit", "storage", "max. charges"]) || bought;
+      const storageKeywords = ["massime", "maximum", "capacit", "storage", "max", "+30 paint", "+30", "cariche"];
+      if (this.autoUpgradeCooldown) bought = findAndClickUpgrade(["ricarica", "recharge", "cooldown", "speed", "velocit"], storageKeywords) || bought;
+      if (this.autoUpgradeStorage) bought = findAndClickUpgrade(storageKeywords) || bought;
 
       if (bought) {
         await new Promise(r => setTimeout(r, 200));
         const confirmBtn = document.querySelector(".modal-box .flex.w-max.flex-col button") || document.querySelector(".modal-box button.btn-primary") || Array.from(document.querySelectorAll(".modal-box button")).find(b => b.innerText.toLowerCase().includes("conferma") || b.innerText.toLowerCase().includes("buy") || b.innerText.toLowerCase().includes("compra"));
         if (confirmBtn) confirmBtn.click();
         await new Promise(r => setTimeout(r, 200));
+        this.drawTime = 0;
       } else if (force) {
         // If we forced a test and nothing was bought (probably not enough droplets), we still opened it, let's just close it.
       }
@@ -3338,6 +3593,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         await wait(1000);
         await this.closeAll();
         await wait(500);
+        this.drawTime = 0;
         return this.draw();
       }
       const indexes = new Map;
@@ -3496,9 +3752,9 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
     this.widget.$autoDraw.innerText = "Avvio...";
     addClass(this.widget.element, "running");
     let errorCount = 0;
-    let drawTime = 0;
+    this.drawTime = 0;
     this.autoDrawInterval = setInterval(async () => {
-      const deltaTime = drawTime - Date.now();
+      const deltaTime = this.drawTime - Date.now();
       if (deltaTime > 0)
         this.widget.$autoDraw.innerText = `Disegno Auto in (${deltaTime / 60000 | 0}:${(deltaTime % 60000 / 1000 | 0).toString().padStart(2, "0")})!`;
       else {
@@ -3506,11 +3762,11 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         if (this.drawThreshold > 0) {
           // Aggiunge un pizzico di randomicità: +- 2 secondi (2000ms) alla pausa a minuto
           const randomJitter = (Math.random() * 4000) - 2000;
-          drawTime = Date.now() + (this.drawThreshold * 60000) + randomJitter;
+          this.drawTime = Date.now() + (this.drawThreshold * 60000) + randomJitter;
         } else {
           // Aggiunge randomicità anche per il calcolo basato sulle cariche max
           const randomJitter = (Math.random() * 4000) - 2000;
-          drawTime = Date.now() + (this.me?.charges.max ?? 100) * 0.9 * cooldownMs + randomJitter;
+          this.drawTime = Date.now() + (this.me?.charges.max ?? 100) * 0.9 * cooldownMs + randomJitter;
         }
         try {
           await this.draw();
@@ -3533,7 +3789,9 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       title: this.title,
       autoUpgradeCooldown: this.autoUpgradeCooldown,
       autoUpgradeStorage: this.autoUpgradeStorage,
-      drawThreshold: this.drawThreshold
+      drawThreshold: this.drawThreshold,
+      syncRoomId: this.syncRoomId,
+      wsServerUrl: this.wsServerUrl
     };
   }
   async updateColorsData() {

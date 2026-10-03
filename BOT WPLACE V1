@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.6.0
+// @version      6.7.0
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -3181,11 +3181,20 @@ class Widget extends Base2 {
     // Timer per l'ETA della ricarica
     workerSetInterval(() => {
       if (this.bot.me) {
-        const charges = Math.floor(this.bot.me.charges.count ?? 0);
         const max = this.bot.me.charges.max ?? 100;
+        const cooldownMs = this.bot.me.charges.cooldownMs ?? 30000;
+        
+        if (this.bot.me.charges.count < max) {
+          this.bot.me.charges.count += 1000 / cooldownMs;
+          if (this.bot.me.charges.count > max) {
+            this.bot.me.charges.count = max;
+          }
+        }
+
+        const charges = Math.floor(this.bot.me.charges.count ?? 0);
+        
         if (charges < max) {
           const remaining = max - charges;
-          const cooldownMs = this.bot.me.charges.cooldownMs ?? 30000;
           const totalMs = remaining * cooldownMs;
           const minutes = Math.floor(totalMs / 60000);
           const seconds = Math.floor((totalMs % 60000) / 1000);
@@ -3811,6 +3820,9 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         }));
 
         charges--;
+        if (this.me && this.me.charges) {
+          this.me.charges.count--;
+        }
         progress((initialCharges - charges) / initialCharges);
 
         // Jitter dopo l'azione, invece del wait fisso a 1

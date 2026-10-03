@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.1.2
+// @version      6.2.0
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -2748,7 +2748,7 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
     <div class="status"></div>
   </div>
   <div class="form">
-    <div class="bot-settings-panel" style="display: none; flex-direction: column; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #ffffff1a; margin-bottom: 8px;">
+    <div class="bot-settings-panel" style="display: none; flex-direction: column; gap: 8px; padding-bottom: 8px;">
       <label class="row"><span>Pausa AutoDraw (Minuti, 0=Auto)</span><input type="number" class="draw-threshold" min="0" max="1000" value="0" style="width: 60px;"></label>
       <label class="row"><span>Strategia</span><select class="strategy">
         <option value="SEQUENTIAL" selected>Sequenziale</option>
@@ -2780,29 +2780,31 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
         </div>
       </div>
     </div>
-    <div class="controls-section">
-      <div class="actions">
-        <button class="draw" disabled>Disegna</button>
-        <button class="auto-draw" disabled>Disegno Auto</button>
-        <button class="export-bot" style="font-size: 11px;">📤 Esporta Setup</button>
-        <button class="import-bot" style="font-size: 11px;">📥 Importa Setup</button>
+    <div class="main-view" style="display: flex; flex-direction: column; gap: 8px;">
+      <div class="controls-section">
+        <div class="actions">
+          <button class="draw" disabled>Disegna</button>
+          <button class="auto-draw" disabled>Disegno Auto</button>
+          <button class="export-bot" style="font-size: 11px;">📤 Esporta Setup</button>
+          <button class="import-bot" style="font-size: 11px;">📥 Importa Setup</button>
+        </div>
       </div>
-    </div>
-    <div class="multi-account-dashboard" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-surface); margin-bottom: 8px;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span class="section-title">Dashboard Multi-Account</span>
-        <span class="dashboard-active-count" style="font-size: 11px; color: var(--wb-accent);">0 online</span>
+      <div class="multi-account-dashboard" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-surface); margin-bottom: 8px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span class="section-title">Dashboard Multi-Account</span>
+          <span class="dashboard-active-count" style="font-size: 11px; color: var(--wb-accent);">0 online</span>
+        </div>
+        <div class="dashboard-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 80px; overflow-y: auto;"></div>
+        <div style="font-size: 11px; margin-top: 4px; border-top: 1px solid var(--wb-border); padding-top: 4px;">
+          <span style="color: var(--wb-text-dim);">ETA Globale:</span> <span class="dashboard-eta">Calcolo...</span>
+        </div>
       </div>
-      <div class="dashboard-list" style="display: flex; flex-direction: column; gap: 4px; max-height: 80px; overflow-y: auto;"></div>
-      <div style="font-size: 11px; margin-top: 4px; border-top: 1px solid var(--wb-border); padding-top: 4px;">
-        <span style="color: var(--wb-text-dim);">ETA Globale:</span> <span class="dashboard-eta">Calcolo...</span>
+      <div class="section-head">
+        <span class="section-title">Immagini</span>
+        <button class="add-image" disabled>Aggiungi immagine</button>
       </div>
+      <div class="images"></div>
     </div>
-    <div class="section-head">
-      <span class="section-title">Immagini</span>
-      <button class="add-image" disabled>Aggiungi immagine</button>
-    </div>
-    <div class="images"></div>
   </div>
 </div>
 `;
@@ -2848,6 +2850,7 @@ class Widget extends Base2 {
   $dashboardActiveCount;
   $dashboardList;
   $dashboardEta;
+  $mainView;
   peers = new Map();
   syncChannel = new BroadcastChannel('wplace-bot-sync');
   instanceId = Math.random().toString(36).slice(2);
@@ -2863,6 +2866,7 @@ class Widget extends Base2 {
       $openButton: ".open-button",
       $openBotSettings: ".open-bot-settings",
       $botSettingsPanel: ".bot-settings-panel",
+      $mainView: ".main-view",
       $drawThreshold: ".draw-threshold",
       $closeModal: ".close-modal",
       $settings: ".form",
@@ -2982,7 +2986,13 @@ class Widget extends Base2 {
     this.$autoDraw.addEventListener("click", () => this.bot.autoDraw());
 
     this.$openBotSettings.addEventListener("click", () => {
-      this.$botSettingsPanel.style.display = this.$botSettingsPanel.style.display === "none" ? "flex" : "none";
+      if (this.$botSettingsPanel.style.display === "none") {
+        this.$botSettingsPanel.style.display = "flex";
+        this.$mainView.style.display = "none";
+      } else {
+        this.$botSettingsPanel.style.display = "none";
+        this.$mainView.style.display = "flex";
+      }
     });
     this.$drawThreshold.addEventListener("change", () => {
       this.bot.drawThreshold = Number(this.$drawThreshold.value) || 0;

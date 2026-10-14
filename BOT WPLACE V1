@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.7.0
+// @version      6.10.0
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -351,8 +351,8 @@ var image_default = `<div class="topbar">
       </select>
     </label>
     <button class="reset-size">Ripristina dimensione [<span></span>px]</button>
-    <label>
-      <input type="checkbox" class="draw-transparent" />&nbsp;Cancella i pixel trasparenti
+    <label title="Cancella con il trasparente (colore 0) i punti della mappa dove l'immagine è trasparente (i pixel del tuo disegno NON vengono mai toccati)">
+      <input type="checkbox" class="draw-transparent" />&nbsp;Cancella sfondo mappa con trasparente
     </label>
     <label>
       <input type="checkbox" class="draw-colors-in-order" />&nbsp;Disegna i colori in ordine
@@ -417,7 +417,8 @@ async function loadSave() {
     if (typeof raw !== "object" || raw === null)
       return;
     return migrate(raw);
-  } catch {
+  } catch (error) {
+    console.error("Errore durante loadSave():", error);
     return;
   }
 }
@@ -454,38 +455,63 @@ async function migrateSaveFromLS() {
   }
 }
 function migrateImage(old) {
+  if (!old || typeof old !== "object") return null;
   if (!old.version || old.version < SAVE_VERSION) {
-    const { url, width, brightness } = old.pixels;
+    const pixels = (old.pixels && typeof old.pixels === "object") ? old.pixels : old;
+    const url = pixels.url || old.url || "";
+    const width = pixels.width ?? old.width ?? 0;
+    const brightness = pixels.brightness ?? old.brightness ?? 0;
+
+    let position = old.position;
+    if (position && !Array.isArray(position) && typeof position === "object") {
+      if (position.globalX !== undefined && position.globalY !== undefined) {
+        position = [position.globalX, position.globalY];
+      } else if (position.x !== undefined && position.y !== undefined) {
+        position = [position.x, position.y];
+      }
+    }
+
     return {
       url,
       width,
       brightness,
-      position: old.position,
-      strategy: "SPIRAL_TO_CENTER" /* SPIRAL_TO_CENTER */,
-      opacity: old.opacity,
-      drawTransparentPixels: old.drawTransparentPixels,
-      drawColorsInOrder: old.drawColorsInOrder,
-      colors: [],
-      disabledColors: [],
-      lock: old.lock,
-      disabled: false,
-      name: `Immagine senza nome`,
-      unownedColorStrategy: "BUY" /* BUY */,
-      version: 3
+      position: position || [0, 0],
+      strategy: old.strategy || "SPIRAL_TO_CENTER",
+      opacity: old.opacity ?? 1,
+      drawTransparentPixels: old.drawTransparentPixels ?? false,
+      drawTransparentOnDrawn: old.drawTransparentOnDrawn ?? false,
+      transparentDrawnTarget: old.transparentDrawnTarget || "ALL",
+      drawColorsInOrder: old.drawColorsInOrder ?? false,
+      colors: Array.isArray(old.colors) ? old.colors : [],
+      disabledColors: Array.isArray(old.disabledColors) ? old.disabledColors : [],
+      lock: old.lock ?? false,
+      disabled: old.disabled ?? false,
+      name: old.name || "Immagine senza nome",
+      unownedColorStrategy: old.unownedColorStrategy || "BUY",
+      version: SAVE_VERSION
     };
   }
   return old;
 }
 function migrate(old) {
-  if (!old.version || old.version < SAVE_VERSION) {
+  if (!old || typeof old !== "object") return null;
+  if (Array.isArray(old)) {
     return {
-      version: 3,
-      images: old.images.map(migrateImage),
-      strategy: old.strategy,
+      version: SAVE_VERSION,
+      images: old.map(migrateImage).filter(Boolean),
+      strategy: "SPIRAL_TO_CENTER",
       title: "WPlace-bot"
     };
   }
-  return old;
+  const rawImages = Array.isArray(old.images) ? old.images : [];
+  const images = rawImages.map(migrateImage).filter(Boolean);
+  return {
+    ...old,
+    version: SAVE_VERSION,
+    images,
+    strategy: old.strategy || "SPIRAL_TO_CENTER",
+    title: old.title || "WPlace-bot"
+  };
 }
 
 // src/utils.ts
@@ -776,7 +802,9 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
       unownedColorStrategy,
       globalX,
       globalY,
-      drawTransparentPixels
+      drawTransparentPixels,
+      drawTransparentOnDrawn,
+      transparentDrawnTarget
     } = request;
     let lastProgress = 0;
     let scaled;
@@ -876,9 +904,10 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
       colorsOrderMap.set(drawColor, index);
     }
     const positions = strategyPosition(strategy, height, width, pixels2);
-    const tasks = [];
+    const drawingTasks = [];
+    const transparentTasks = [];
     lastProgress = 0;
-    for (let index = 0;index < positions.length; index += 2) {
+    for (let index = 0; index < positions.length; index += 2) {
       const progress = index / positions.length * 10 | 0;
       if (progress !== lastProgress) {
         lastProgress = progress;
@@ -890,22 +919,39 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
       const gx = globalX + dx;
       const gy = globalY + dy;
       const map = mapsCache.get(packTile(toTile(gx), toTile(gy)));
-      const mapColor = map[toTilePosition(gy) * 1000 + toTilePosition(gx)];
-      if (color === mapColor)
-        continue;
-      const realColor = realPixels[dy * width + dx];
-      colorStat.get(realColor).left++;
-      if (skipColors.has(color) || !drawTransparentPixels && color === 0)
-        continue;
-      tasks.push({
-        gx,
-        gy,
-        color,
-        realColor
-      });
+      const mapColor = map ? map[toTilePosition(gy) * 1000 + toTilePosition(gx)] : 0;
+
+      if (color !== 0) {
+        // Pixel del disegno: se sulla mappa c'è già il colore corretto, non toccarlo mai!
+        if (color === mapColor)
+          continue;
+        const realColor = realPixels[dy * width + dx];
+        colorStat.get(realColor).left++;
+        if (skipColors.has(color))
+          continue;
+        drawingTasks.push({
+          gx,
+          gy,
+          color,
+          realColor
+        });
+      } else {
+        // Pixel trasparente dell'immagine: cancella con trasparente solo se sulla mappa c'è un pixel disegnato
+        if (mapColor !== 0 && drawTransparentPixels) {
+          const stat = colorStat.get(0);
+          if (stat) stat.left++;
+          transparentTasks.push({
+            gx,
+            gy,
+            color: 0,
+            realColor: 0
+          });
+        }
+      }
     }
     if (drawColorsInOrder)
-      tasks.sort((a, b) => (colorsOrderMap.get(a.color) ?? 0) - (colorsOrderMap.get(b.color) ?? 0));
+      drawingTasks.sort((a, b) => (colorsOrderMap.get(a.color) ?? 0) - (colorsOrderMap.get(b.color) ?? 0));
+    const tasks = drawingTasks.concat(transparentTasks);
     const taskPositions = new Uint32Array(tasks.length * 2);
     for (let index = 0;index < tasks.length; index++) {
       const task = tasks[index];
@@ -1088,25 +1134,33 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
     }));
   }
   async function updateMapPixels(tileX, tileY) {
-    const res = await fetch(\`https://backend.wplace.live/files/s0/tiles/\${tileX}/\${tileY}.png\`);
-    const blob = await res.blob();
-    const bitmap = await createImageBitmap(blob);
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(bitmap, 0, 0);
-    const data = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
-    const SIZE = bitmap.height * bitmap.width;
-    const pixels2 = new Uint8Array(SIZE);
-    for (let i = 0, pi = 0;i < data.length; i += 4, pi++) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      const a = data[i + 3];
-      const key = r << 16 | g << 8 | b;
-      pixels2[pi] = a < 100 ? 0 : COLORS_RGB_MAP.get(key) ?? 0;
+    try {
+      const res = await fetch(\`https://backend.wplace.live/files/s0/tiles/\${tileX}/\${tileY}.png\`);
+      if (!res.ok) {
+        mapsCache.set(packTile(tileX, tileY), new Uint8Array(1000 * 1000));
+        return;
+      }
+      const blob = await res.blob();
+      const bitmap = await createImageBitmap(blob);
+      const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(bitmap, 0, 0);
+      const data = ctx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+      const SIZE = bitmap.height * bitmap.width;
+      const pixels2 = new Uint8Array(SIZE);
+      for (let i = 0, pi = 0;i < data.length; i += 4, pi++) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const a = data[i + 3];
+        const key = r << 16 | g << 8 | b;
+        pixels2[pi] = a < 100 ? 0 : COLORS_RGB_MAP.get(key) ?? 0;
+      }
+      mapsCache.set(packTile(tileX, tileY), pixels2);
+      return pixels2;
+    } catch (e) {
+      mapsCache.set(packTile(tileX, tileY), new Uint8Array(1000 * 1000));
     }
-    mapsCache.set(packTile(tileX, tileY), pixels2);
-    return pixels2;
   }
   var packTile = (tileX, tileY) => tileX << 11 | tileY;
   var toTile = (n) => n / WORLD_TILE_SIZE | 0;
@@ -1179,14 +1233,29 @@ addFavoriteLocation({
   y: WORLD_PIXEL_SIZE / 3 * 2 | 0
 });
 function extractScreenPositionFromStar($star) {
-  const [x, y] = $star.style.transform.slice(32, -31).split(", ").map((x2) => Number.parseFloat(x2));
-  return { x, y };
+  if (!$star || !$star.style) return { x: 0, y: 0 };
+  const match = $star.style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/);
+  if (match) {
+    return { x: Number.parseFloat(match[1]), y: Number.parseFloat(match[2]) };
+  }
+  return { x: 0, y: 0 };
 }
 
 class WorldPosition {
   bot;
   static fromJSON(bot, data) {
-    return new WorldPosition(bot, ...data);
+    if (Array.isArray(data)) {
+      return new WorldPosition(bot, ...data);
+    }
+    if (data && typeof data === "object") {
+      if (data.globalX !== undefined && data.globalY !== undefined) {
+        return new WorldPosition(bot, data.globalX, data.globalY);
+      }
+      if (data.x !== undefined && data.y !== undefined) {
+        return new WorldPosition(bot, data.x, data.y);
+      }
+    }
+    return undefined;
   }
   static fromScreenPosition(bot, position) {
     const { anchorScreenPosition, pixelSize, anchorWorldPosition } = bot.findAnchorsForScreen(position);
@@ -1296,6 +1365,8 @@ class BotImage extends Base2 {
   strategy;
   opacity;
   drawTransparentPixels;
+  drawTransparentOnDrawn;
+  transparentDrawnTarget;
   drawColorsInOrder;
   colors;
   disabledColors;
@@ -1442,8 +1513,9 @@ class BotImage extends Base2 {
       await this.updatePixels();
       await save(this.bot);
     });
-    this.$drawTransparent.addEventListener("click", () => {
+    this.$drawTransparent.addEventListener("click", async () => {
       this.drawTransparentPixels = this.$drawTransparent.checked;
+      await this.updatePixels();
       save(this.bot);
     });
     this.$drawColorsInOrder.addEventListener("click", () => {
@@ -1578,8 +1650,8 @@ class BotImage extends Base2 {
     this.$drawColorsInOrder.checked = this.drawColorsInOrder;
     this.$name.value = this.name;
     const maxTasks = this.width * this.height;
-    const doneTasks = maxTasks - this.tasks.length / 2;
-    const percent = formatPercent(doneTasks / maxTasks);
+    const doneTasks = Math.max(0, maxTasks - this.tasks.length / 2);
+    const percent = maxTasks > 0 ? formatPercent(doneTasks / maxTasks) : "0%";
     this.$progressText.textContent = `${doneTasks}/${maxTasks} ${percent} Tempo stimato: ${etaText(this.bot, this.tasks.length / 2)}`;
     this.$progressLine.style.transform = `scaleX(${percent})`;
     if (this.lock)
@@ -1605,7 +1677,10 @@ class BotImage extends Base2 {
       if (this.drawTransparentPixels || stat.realColor !== 0)
         pixelsSum += stat.amount;
     if (this.colors.length !== this.colorsStat.size || this.colors.some((x) => !this.colorsStat.has(x))) {
-      this.colors = this.colorsStat.values().toArray().sort((a, b) => b.amount - a.amount).map((color) => color.realColor);
+      const nonZero = this.colorsStat.values().toArray().filter((x) => x.realColor !== 0).sort((a, b) => b.amount - a.amount).map((color) => color.realColor);
+      if (this.colorsStat.has(0))
+        nonZero.push(0);
+      this.colors = nonZero;
       save(this.bot);
     }
     this.$colors.style.height = `${LINE_HEIGHT * this.colors.length}px`;
@@ -2130,6 +2205,11 @@ var style_default = `@import url('https://fonts.googleapis.com/css2?family=JetBr
   font-size: 11px;
 }
 
+.widget .draw.drawing::before {
+  content: '⏹';
+  font-size: 12px;
+}
+
 .widget .auto-draw::before {
   content: '↻';
   font-size: 15px;
@@ -2146,10 +2226,20 @@ var style_default = `@import url('https://fonts.googleapis.com/css2?family=JetBr
   box-shadow: 0 4px 14px rgba(var(--wb-accent-rgb), 0.28);
 }
 
+.widget .draw.drawing {
+  background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+  color: #fff !important;
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35) !important;
+}
+
 .widget .draw:hover:not(:disabled) {
   border-color: transparent;
   background: linear-gradient(135deg, #6bffa6, #2fd47c);
   box-shadow: 0 6px 20px rgba(var(--wb-accent-rgb), 0.42);
+}
+
+.widget .draw.drawing:hover {
+  background: linear-gradient(135deg, #f87171, #ef4444) !important;
 }
 
 .widget .draw:disabled {
@@ -2789,6 +2879,12 @@ var widget_default = `<button class="open-button" title="Apri / chiudi il pannel
   <div class="form">
     <div class="bot-settings-panel" style="display: none; flex-direction: column; gap: 8px; padding-bottom: 8px;">
       <label class="row"><span>Pausa AutoDraw (Minuti, 0=Auto)</span><input type="number" class="draw-threshold" min="0" max="1000" value="0" style="width: 60px;"></label>
+      <label class="row"><span>Velocità Pixel</span><select class="draw-speed">
+        <option value="NORMAL">Normale (Umano ~3 px/s)</option>
+        <option value="FAST" selected>Veloce (~8 px/s)</option>
+        <option value="ULTRA">Molto Veloce (~15 px/s)</option>
+        <option value="INSTANT">Turbo / Istantaneo (~40 px/s)</option>
+      </select></label>
       <label class="row"><span>Strategia</span><select class="strategy">
         <option value="SEQUENTIAL" selected>Sequenziale</option>
         <option value="ALL">Tutti</option>
@@ -2920,6 +3016,7 @@ class Widget extends Base2 {
       $botSettingsPanel: ".bot-settings-panel",
       $mainView: ".main-view",
       $drawThreshold: ".draw-threshold",
+      $drawSpeed: ".draw-speed",
       $closeModal: ".close-modal",
       $settings: ".form",
       $status: ".status",
@@ -3032,6 +3129,11 @@ class Widget extends Base2 {
     });
 
     this.$draw.addEventListener("click", () => {
+      if (this.bot.isDrawing) {
+        this.bot.stopRequested = true;
+        this.$draw.innerText = "Arresto...";
+        return;
+      }
       this.bot.draw();
       for (const target of this.selectedPeers) {
         if (target !== this.instanceId) {
@@ -3070,6 +3172,10 @@ class Widget extends Base2 {
       this.bot.drawThreshold = Number(this.$drawThreshold.value) || 0;
       save(this.bot);
     });
+    this.$drawSpeed.addEventListener("change", () => {
+      this.bot.drawSpeed = this.$drawSpeed.value;
+      save(this.bot);
+    });
     this.$autoUpgradeCooldown.addEventListener("change", () => {
       this.bot.autoUpgradeCooldown = this.$autoUpgradeCooldown.checked;
       save(this.bot);
@@ -3084,7 +3190,7 @@ class Widget extends Base2 {
       }
     });
 
-    if(this.$editSyncId) {
+    if (this.$editSyncId) {
       this.$editSyncId.addEventListener("click", () => {
         this.$syncRoomId.removeAttribute("readonly");
         this.$syncRoomId.focus();
@@ -3095,14 +3201,14 @@ class Widget extends Base2 {
         this.$syncRoomId.setAttribute("readonly", "true");
         this.$editSyncId.style.display = "inline-block";
         this.$saveSyncId.style.display = "none";
-        
+
         this.bot.syncRoomId = this.$syncRoomId.value.trim();
         await save(this.bot, true);
         document.location.reload();
       });
     }
 
-    if(this.$editWsUrl) {
+    if (this.$editWsUrl) {
       this.$editWsUrl.addEventListener("click", () => {
         this.$wsServerUrl.removeAttribute("readonly");
         this.$wsServerUrl.focus();
@@ -3113,7 +3219,7 @@ class Widget extends Base2 {
         this.$wsServerUrl.setAttribute("readonly", "true");
         this.$editWsUrl.style.display = "inline-block";
         this.$saveWsUrl.style.display = "none";
-        
+
         this.bot.wsServerUrl = this.$wsServerUrl.value.trim();
         await save(this.bot, true);
         document.location.reload();
@@ -3134,15 +3240,15 @@ class Widget extends Base2 {
 
     if (this.$massToggleBtn) {
       this.$massToggleBtn.addEventListener("click", () => {
-         const allBots = Array.from(this.peers.values());
-         allBots.push({id: this.instanceId});
-         const allSelected = allBots.every(b => this.selectedPeers.has(b.id));
-         if (allSelected) {
-           this.selectedPeers.clear();
-         } else {
-           allBots.forEach(b => this.selectedPeers.add(b.id));
-         }
-         this.updateDashboard();
+        const allBots = Array.from(this.peers.values());
+        allBots.push({ id: this.instanceId });
+        const allSelected = allBots.every(b => this.selectedPeers.has(b.id));
+        if (allSelected) {
+          this.selectedPeers.clear();
+        } else {
+          allBots.forEach(b => this.selectedPeers.add(b.id));
+        }
+        this.updateDashboard();
       });
     }
 
@@ -3159,18 +3265,29 @@ class Widget extends Base2 {
     this.$importBot.addEventListener("click", () => {
       const input = document.createElement("input");
       input.type = "file";
-      input.accept = ".wbot";
+      input.accept = ".wbot,.json,.txt,*";
       input.click();
       input.addEventListener("change", async () => {
         const file = input.files?.[0];
         if (file) {
           try {
-            const json = JSON.parse(await file.text());
+            const text = await file.text();
+            let json;
+            try {
+              json = JSON.parse(text);
+            } catch (jsonErr) {
+              throw new Error("Il file selezionato non è un file JSON/setup valido.");
+            }
             const migrated = migrate(json);
+            if (!migrated || !Array.isArray(migrated.images)) {
+              throw new Error("Struttura del setup non valida.");
+            }
             await idbSet(KEY_NAME, migrated);
+            alert(`Setup importato con successo (${migrated.images.length} immagini)! La pagina verrà ricaricata.`);
             document.location.reload();
           } catch (e) {
-            alert("Errore durante l'importazione del setup!");
+            console.error("Errore importazione setup:", e);
+            alert("Errore durante l'importazione del setup: " + (e?.message || e));
           }
         }
       });
@@ -3183,7 +3300,7 @@ class Widget extends Base2 {
       if (this.bot.me) {
         const max = this.bot.me.charges.max ?? 100;
         const cooldownMs = this.bot.me.charges.cooldownMs ?? 30000;
-        
+
         if (this.bot.me.charges.count < max) {
           this.bot.me.charges.count += 1000 / cooldownMs;
           if (this.bot.me.charges.count > max) {
@@ -3192,7 +3309,7 @@ class Widget extends Base2 {
         }
 
         const charges = Math.floor(this.bot.me.charges.count ?? 0);
-        
+
         if (charges < max) {
           const remaining = max - charges;
           const totalMs = remaining * cooldownMs;
@@ -3206,9 +3323,9 @@ class Widget extends Base2 {
     }, 1000);
 
     this.bot.syncRoomId = this.bot.syncRoomId || Math.random().toString(36).slice(2, 8).toUpperCase();
-    if(this.$syncRoomId) this.$syncRoomId.value = this.bot.syncRoomId;
-    if(this.$wsServerUrl) this.$wsServerUrl.value = this.bot.wsServerUrl;
-    
+    if (this.$syncRoomId) this.$syncRoomId.value = this.bot.syncRoomId;
+    if (this.$wsServerUrl) this.$wsServerUrl.value = this.bot.wsServerUrl;
+
     this.syncChannel.onmessage = (event) => {
       if (event.data && event.data.room === this.bot.syncRoomId) {
         if (event.data.type === 'sync') {
@@ -3240,7 +3357,7 @@ class Widget extends Base2 {
               }
             }
           }
-        } catch (e) {}
+        } catch (e) { }
       };
     };
     bindWs();
@@ -3267,9 +3384,9 @@ class Widget extends Base2 {
         isAutoDrawing: !!this.bot.autoDrawInterval,
         timestamp: Date.now()
       };
-      
+
       if (this.ws.readyState === 1) {
-          this.ws.send(JSON.stringify(msg));
+        this.ws.send(JSON.stringify(msg));
       }
       this.syncChannel.postMessage(msg);
 
@@ -3289,57 +3406,57 @@ class Widget extends Base2 {
     const allBots = Array.from(this.peers.values());
     let remainingTasks = 0;
     for (let index = 0; index < this.bot.images.length; index++) {
-        if (!this.bot.images[index].disabled) remainingTasks += this.bot.images[index].tasks.length / 2;
+      if (!this.bot.images[index].disabled) remainingTasks += this.bot.images[index].tasks.length / 2;
     }
     const mePeer = {
-        id: this.instanceId,
-        name: this.bot.me?.name || this.bot.me?.id || "Ospite",
-        charges: Math.floor(this.bot.me?.charges?.count || 0),
-        maxCharges: this.bot.me?.charges?.max || 100,
-        cooldownMs: this.bot.me?.charges?.cooldownMs || 30000,
-        tasks: remainingTasks,
-        isAutoDrawing: !!this.bot.autoDrawInterval,
-        timestamp: Date.now()
+      id: this.instanceId,
+      name: this.bot.me?.name || this.bot.me?.id || "Ospite",
+      charges: Math.floor(this.bot.me?.charges?.count || 0),
+      maxCharges: this.bot.me?.charges?.max || 100,
+      cooldownMs: this.bot.me?.charges?.cooldownMs || 30000,
+      tasks: remainingTasks,
+      isAutoDrawing: !!this.bot.autoDrawInterval,
+      timestamp: Date.now()
     };
     allBots.push(mePeer);
-    
+
     this.$dashboardActiveCount.innerText = `${allBots.length} online`;
     this.$dashboardList.innerHTML = "";
-    
+
     let totalCharges = 0;
     let totalRegenPerMinute = 0;
-    
+
     for (const bot of allBots) {
-        totalCharges += bot.charges;
-        const regenMs = bot.cooldownMs || 30000;
-        totalRegenPerMinute += (60000 / regenMs);
-        
-        const el = document.createElement("div");
-        el.style.display = "flex";
-        el.style.justifyContent = "space-between";
-        el.style.alignItems = "center";
-        el.style.fontSize = "11px";
-        el.style.color = bot.id === this.instanceId ? "var(--wb-accent)" : "var(--wb-text)";
-        
-        const isSelected = this.selectedPeers.has(bot.id) ? "checked" : "";
-        const autoStr = bot.isAutoDrawing ? "<span style='color:#10b981;font-weight:bold;'>[AUTO]</span>" : "<span style='color:#ef4444;font-weight:bold;'>[OFF]</span>";
-        el.innerHTML = `
+      totalCharges += bot.charges;
+      const regenMs = bot.cooldownMs || 30000;
+      totalRegenPerMinute += (60000 / regenMs);
+
+      const el = document.createElement("div");
+      el.style.display = "flex";
+      el.style.justifyContent = "space-between";
+      el.style.alignItems = "center";
+      el.style.fontSize = "11px";
+      el.style.color = bot.id === this.instanceId ? "var(--wb-accent)" : "var(--wb-text)";
+
+      const isSelected = this.selectedPeers.has(bot.id) ? "checked" : "";
+      const autoStr = bot.isAutoDrawing ? "<span style='color:#10b981;font-weight:bold;'>[AUTO]</span>" : "<span style='color:#ef4444;font-weight:bold;'>[OFF]</span>";
+      el.innerHTML = `
           <div style="display:flex; align-items:center; gap:4px;">
             <input type="checkbox" class="select-peer-chk" data-id="${bot.id}" ${isSelected} style="margin:0; width:12px; height:12px; cursor:pointer;">
-            <span>${String(bot.name).substring(0,12)} ${autoStr}</span>
+            <span>${String(bot.name).substring(0, 12)} ${autoStr}</span>
           </div>
           <span>⚡ ${bot.charges}/${bot.maxCharges}</span>`;
-        this.$dashboardList.appendChild(el);
+      this.$dashboardList.appendChild(el);
     }
-    
+
     const missingTasks = remainingTasks - totalCharges;
     if (missingTasks <= 0) {
-        this.$dashboardEta.innerText = "Pronto / Finito";
+      this.$dashboardEta.innerText = "Pronto / Finito";
     } else {
-        const minutes = missingTasks / totalRegenPerMinute;
-        const h = Math.floor(minutes / 60);
-        const m = Math.floor(minutes % 60);
-        this.$dashboardEta.innerText = `${h}h ${m}m (${remainingTasks} px rimasti)`;
+      const minutes = missingTasks / totalRegenPerMinute;
+      const h = Math.floor(minutes / 60);
+      const m = Math.floor(minutes % 60);
+      this.$dashboardEta.innerText = `${h}h ${m}m (${remainingTasks} px rimasti)`;
     }
   }
   addImage() {
@@ -3373,6 +3490,7 @@ class Widget extends Base2 {
   update() {
     this.$strategy.value = this.bot.strategy;
     this.$drawThreshold.value = this.bot.drawThreshold.toString();
+    if (this.$drawSpeed) this.$drawSpeed.value = this.bot.drawSpeed || "FAST";
     this.$autoUpgradeCooldown.checked = this.bot.autoUpgradeCooldown;
     this.$autoUpgradeStorage.checked = this.bot.autoUpgradeStorage;
     let maxTasks = 0;
@@ -3381,11 +3499,11 @@ class Widget extends Base2 {
       const image = this.bot.images[index];
       if (image.disabled)
         continue;
-      maxTasks += image.width * image.height;
+      maxTasks += image.drawTransparentOnDrawn ? (image.colorsStat.get(0)?.amount || image.width * image.height) : (image.width * image.height);
       totalTasks += image.tasks.length / 2;
     }
-    const doneTasks = maxTasks - totalTasks;
-    const percent = formatPercent(doneTasks / maxTasks);
+    const doneTasks = Math.max(0, maxTasks - totalTasks);
+    const percent = maxTasks > 0 ? formatPercent(doneTasks / maxTasks) : "0%";
     this.$progressText.textContent = `${doneTasks}/${maxTasks} ${percent} Tempo stimato: ${etaText(this.bot, totalTasks)}`;
     this.$progressLine.style.transform = `scaleX(${percent})`;
     this.$images.innerHTML = "";
@@ -3492,8 +3610,11 @@ class WPlaceBot {
   autoDrawInterval;
   autoUpgradeCooldown = false;
   autoUpgradeStorage = false;
+  drawSpeed = "FAST";
   drawThreshold = 0;
   drawTime = 0;
+  isDrawing = false;
+  stopRequested = false;
   syncRoomId = "";
   wsServerUrl = "wss://wplace-ultimate-auto-painter.onrender.com";
   widget;
@@ -3501,18 +3622,23 @@ class WPlaceBot {
   lastColor;
   constructor(save2) {
     if (save2) {
-      for (let index = 0; index < save2.images.length; index++) {
-        const image = save2.images[index];
-        addFavoriteLocation({
-          x: image.position[0] - 1000,
-          y: image.position[1] - 1000
-        });
-        addFavoriteLocation({
-          x: image.position[0] + 1000,
-          y: image.position[1] + 1000
-        });
+      if (Array.isArray(save2.images)) {
+        for (let index = 0; index < save2.images.length; index++) {
+          const image = save2.images[index];
+          if (image && Array.isArray(image.position) && image.position.length >= 2) {
+            addFavoriteLocation({
+              x: image.position[0] - 1000,
+              y: image.position[1] - 1000
+            });
+            addFavoriteLocation({
+              x: image.position[0] + 1000,
+              y: image.position[1] + 1000
+            });
+          }
+        }
       }
       this.strategy = save2.strategy;
+      this.drawSpeed = save2.drawSpeed || "FAST";
       this.autoUpgradeCooldown = save2.autoUpgradeCooldown ?? false;
       this.autoUpgradeStorage = save2.autoUpgradeStorage ?? false;
       this.drawThreshold = save2.drawThreshold ?? 0;
@@ -3522,54 +3648,61 @@ class WPlaceBot {
     } else {
       this.title = "WPlace-bot";
     }
-    
+
     this.widget = new Widget(this);
-    
+
     this.registerFetchInterceptor();
     const style = document.createElement("style");
     style.textContent = obfuscateCSS(style_default.replace("FAKE_FAVORITE_LOCATIONS", FAVORITE_LOCATIONS.length.toString()));
     document.head.append(style);
     this.widget.run("Inizializzazione", async (progress) => {
-      await this.waitForElement(".avatar.center-absolute.absolute");
-      progress(0.01);
-      await this.waitForElement(".btn.btn-primary.btn-lg.relative.z-30 canvas");
+      await this.waitForElement(".maplibregl-canvas-container, #map", 8000);
       progress(0.02);
-      const $canvasContainer = await this.waitForElement(".maplibregl-canvas-container");
+      await this.waitForElement(".paint-button-content, button.btn-primary", 8000);
       progress(0.03);
-      new MutationObserver((mutations) => {
-        for (let index = 0; index < mutations.length; index++)
-          if (mutations[index].removedNodes.length !== 0) {
-            this.updateStars();
-            break;
-          }
-        for (let index = 0; index < this.images.length; index++)
-          this.images[index].updateUI();
-      }).observe($canvasContainer, {
-        attributes: true,
-        childList: true,
-        subtree: true
-      });
+      const $canvasContainer = document.querySelector(".maplibregl-canvas-container") || document.querySelector("#map");
+      if ($canvasContainer) {
+        new MutationObserver((mutations) => {
+          for (let index = 0; index < mutations.length; index++)
+            if (mutations[index].removedNodes.length !== 0) {
+              this.updateStars();
+              break;
+            }
+          for (let index = 0; index < this.images.length; index++)
+            this.images[index].updateUI();
+        }).observe($canvasContainer, {
+          attributes: true,
+          childList: true,
+          subtree: true
+        });
+      }
       this.updateStars();
       await wait(500);
       progress(0.04);
       await this.updateColorsData();
       progress(0.05);
-      if (save2) {
+      if (save2 && Array.isArray(save2.images) && save2.images.length > 0) {
         const batchSize = 1 / save2.images.length;
         for (let index = 0; index < save2.images.length; index++) {
-          await BotImage.fromJSON(this, save2.images[index], (p) => {
-            progress(0.05 + (index * batchSize + p * batchSize) * 0.95);
-          });
+          try {
+            await BotImage.fromJSON(this, save2.images[index], (p) => {
+              progress(0.05 + (index * batchSize + p * batchSize) * 0.95);
+            });
+          } catch (imgErr) {
+            console.warn(`Impossibile caricare l'immagine salvata all'indice ${index}:`, imgErr);
+          }
         }
       }
       this.widget.setDisabled("draw", false);
       this.widget.setDisabled("auto-draw", false);
       this.widget.setDisabled("add-image", false);
-    }).catch(async () => {
-      if (window.confirm(`WPlace-bot couldn't load!
-Do you want to CLEAR ALL DATA to fix it?
+    }).catch(async (error) => {
+      console.error("Errore durante l'inizializzazione del bot:", error);
+      if (window.confirm(`WPlace Ultimate Auto-Painter non è riuscito a caricarsi!
+Errore: ${error?.message || error}
 
-Hint for next time: Create backup's with \uD83D\uDCE4 button.`)) {
+Vuoi cancellare i dati locali salvati per ripristinare il bot?
+(Consiglio: crea regolarmente dei backup con il pulsante 📤)`)) {
         try {
           const a = document.createElement("a");
           document.body.append(a);
@@ -3578,9 +3711,7 @@ Hint for next time: Create backup's with \uD83D\uDCE4 button.`)) {
           }));
           a.download = `Wplace-Bot-Broken-Save.txt`;
           a.click();
-          window.alert(`Wplace-Bot-Broken-Save.txt è il tuo salvataggio corrotto. Se ti servono DAVVERO i dati da questo salvataggio, apri un'issue su https://github.com/SoundOfTheSky/wplace-bot/issues
-
-Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le issue su github sono pubbliche e il file di salvataggio contiene le tue immagini e le loro posizioni nel mondo.`);
+          window.alert("Il salvataggio è stato esportato come 'Wplace-Bot-Broken-Save.txt'. I dati locali sono stati resettati.");
           DELETE_ALL_DATA();
         } catch {
           DELETE_ALL_DATA();
@@ -3629,7 +3760,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
                 const t = (b.innerText || b.textContent || "").toLowerCase();
                 return t.includes("droplet") || t.includes("💧");
               });
-              
+
               if (btns.length === 1) {
                 // Abbiamo trovato esattamente il bottone di questo upgrade
                 if (!btns[0].disabled) {
@@ -3671,7 +3802,12 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
   }
 
   draw() {
-    this.widget.setDisabled("draw", true);
+    if (this.isDrawing) return;
+    this.isDrawing = true;
+    this.stopRequested = false;
+    this.widget.$draw.innerText = "Stop";
+    addClass(this.widget.$draw, "drawing");
+    this.widget.setDisabled("draw", false);
     this.widget.status = "";
     const $canvas = document.querySelector(".maplibregl-canvas");
     const prevent = (event) => {
@@ -3680,8 +3816,10 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
     };
     return this.widget.run("In disegno", async (progress) => {
       const firstImage = this.images[0];
-      if (!firstImage)
+      if (!firstImage) {
+        this.widget.status = "❌ Nessuna immagine caricata!";
         return;
+      }
       const initialZoom = firstImage.position.pixelSize;
       globalThis.addEventListener("mousemove", prevent, true);
       $canvas.addEventListener("wheel", prevent, true);
@@ -3700,9 +3838,9 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
           credentials: "include"
         }).then((x) => x.json()).then((x) => {
           this.me = x;
-        })
+        }).catch((err) => console.warn("Fetch /me fallita:", err))
       ]));
-      const initialCharges = Math.floor(this.me.charges.count);
+      const initialCharges = Math.floor(this.me?.charges?.count ?? 0);
       let charges = initialCharges;
       let tasksLength = 0;
       const colorsToBuyMap = new Map;
@@ -3738,9 +3876,25 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         this.drawTime = 0;
         return this.draw();
       }
+      if (initialCharges <= 0) {
+        this.widget.status = "⏳ Nessuna carica disponibile!";
+        if (!this.stopRequested && initialZoom && !isNaN(initialZoom) && initialZoom < 4) {
+          await this.zoomOut(initialZoom, $canvas);
+        }
+        return;
+      }
+      if (tasksLength === 0) {
+        this.widget.status = "✅ Disegno già completato!";
+        if (!this.stopRequested && initialZoom && !isNaN(initialZoom) && initialZoom < 4) {
+          await this.zoomOut(initialZoom, $canvas);
+        }
+        return;
+      }
       const indexes = new Map;
       let lastMousePos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
       const drawTask = async (image) => {
+        if (this.stopRequested)
+          return false;
         let index = indexes.get(image);
         if (index === undefined)
           indexes.set(image, index = 0);
@@ -3751,39 +3905,85 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         const worldPosition = new WorldPosition(this, image.tasks[dIndex], image.tasks[dIndex + 1]);
         const color = image.pixels[(worldPosition.globalY - image.position.globalY) * image.width + (worldPosition.globalX - image.position.globalX)];
         if (this.lastColor !== color) {
-          document.getElementById("color-" + color).click();
-          this.lastColor = color;
+          let colorBtn = document.getElementById("color-" + color);
+          if (!colorBtn && color === 0) {
+            colorBtn = document.querySelector('#color-0, button[data-tooltip="Transparent"], button[aria-label="Transparent"]');
+          }
+          if (colorBtn) {
+            colorBtn.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+            colorBtn.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+            colorBtn.click();
+            colorBtn.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+            colorBtn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+            this.lastColor = color;
+            await wait(20);
+          }
         }
-        const halfPixel = worldPosition.pixelSize / 2;
+        const ps = (worldPosition.pixelSize && !isNaN(worldPosition.pixelSize)) ? worldPosition.pixelSize : 1;
+        const halfPixel = ps / 2;
         const position = worldPosition.toScreenPosition();
 
-        const targetX = position.x + halfPixel;
-        const targetY = position.y + halfPixel;
+        const targetX = (position.x || 0) + halfPixel;
+        const targetY = (position.y || 0) + halfPixel;
 
-        // Jitter ritardo iniziale per simulare tempi di reazione umani
-        await wait(Math.random() * 50 + 20);
+        if (this.stopRequested)
+          return false;
 
-        // Movimento fluido del mouse (Humanizer)
-        const steps = 10 + Math.floor(Math.random() * 10); // Da 10 a 20 step
-        for (let i = 1; i <= steps; i++) {
-          const t = i / steps;
-          // Easing: easeOutQuad per rallentare verso la fine
-          const easeT = t * (2 - t);
+        const speed = this.drawSpeed || "FAST";
+        let initialWait, stepCount, stepWait, preClickWait, clickWait, postWait;
 
-          // Leggera curva (deviazione randomica dal percorso lineare)
-          const curveX = Math.sin(t * Math.PI) * (Math.random() * 20 - 10);
-          const curveY = Math.sin(t * Math.PI) * (Math.random() * 20 - 10);
+        if (speed === "INSTANT") {
+          initialWait = 0;
+          stepCount = 0;
+          stepWait = 0;
+          preClickWait = 2;
+          clickWait = 8;
+          postWait = 12;
+        } else if (speed === "ULTRA") {
+          initialWait = 10;
+          stepCount = 2;
+          stepWait = 3;
+          preClickWait = 10;
+          clickWait = 15;
+          postWait = 25;
+        } else if (speed === "FAST") {
+          initialWait = 20;
+          stepCount = 5;
+          stepWait = 5;
+          preClickWait = 20;
+          clickWait = 20;
+          postWait = 40;
+        } else { // "NORMAL"
+          initialWait = Math.random() * 50 + 20;
+          stepCount = 10 + Math.floor(Math.random() * 10);
+          stepWait = Math.random() * 5 + 5;
+          preClickWait = Math.random() * 60 + 30;
+          clickWait = Math.random() * 40 + 20;
+          postWait = Math.random() * 100 + 50;
+        }
 
-          const stepX = lastMousePos.x + (targetX - lastMousePos.x) * easeT + curveX;
-          const stepY = lastMousePos.y + (targetY - lastMousePos.y) * easeT + curveY;
+        if (initialWait > 0)
+          await wait(initialWait);
 
-          document.documentElement.dispatchEvent(new MouseEvent("mousemove", {
-            bubbles: true,
-            clientX: stepX,
-            clientY: stepY,
-            shiftKey: true
-          }));
-          await wait(Math.random() * 5 + 5); // 5-10ms tra i micro-movimenti
+        if (stepCount > 0) {
+          for (let i = 1; i <= stepCount; i++) {
+            const t = i / stepCount;
+            const easeT = t * (2 - t);
+            const curveX = Math.sin(t * Math.PI) * (Math.random() * 10 - 5);
+            const curveY = Math.sin(t * Math.PI) * (Math.random() * 10 - 5);
+
+            const stepX = lastMousePos.x + (targetX - lastMousePos.x) * easeT + curveX;
+            const stepY = lastMousePos.y + (targetY - lastMousePos.y) * easeT + curveY;
+
+            document.documentElement.dispatchEvent(new MouseEvent("mousemove", {
+              bubbles: true,
+              clientX: stepX,
+              clientY: stepY,
+              shiftKey: true
+            }));
+            if (stepWait > 0)
+              await wait(stepWait);
+          }
         }
 
         // Posizione finale esatta
@@ -3795,8 +3995,8 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         }));
         lastMousePos = { x: targetX, y: targetY };
 
-        // Jitter prima di cliccare
-        await wait(Math.random() * 60 + 30);
+        if (preClickWait > 0)
+          await wait(preClickWait);
 
         document.documentElement.dispatchEvent(new KeyboardEvent("keydown", {
           key: " ",
@@ -3807,8 +4007,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
           cancelable: true
         }));
 
-        // Jitter del click (quanto tempo tieni premuto il tasto spazio)
-        await wait(Math.random() * 40 + 20);
+        await wait(clickWait);
 
         document.documentElement.dispatchEvent(new KeyboardEvent("keyup", {
           key: " ",
@@ -3825,28 +4024,30 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         }
         progress((initialCharges - charges) / initialCharges);
 
-        // Jitter dopo l'azione, invece del wait fisso a 1
-        await wait(Math.random() * 100 + 50);
+        if (postWait > 0)
+          await wait(postWait);
         return true;
       };
       switch (this.strategy) {
         case "ALL" /* ALL */: {
-          while (charges > 0) {
+          while (charges > 0 && !this.stopRequested) {
             let end = true;
             for (let imageIndex = 0; imageIndex < this.images.length; imageIndex++) {
+              if (this.stopRequested) break;
               const image = this.images[imageIndex];
               if (image.disabled)
                 continue;
               if (await drawTask(image))
                 end = false;
             }
-            if (end)
+            if (end || this.stopRequested)
               break;
           }
           break;
         }
         case "PERCENTAGE" /* PERCENTAGE */: {
-          for (let taskIndex = 0; taskIndex < tasksLength && charges > 0; taskIndex++) {
+          for (let taskIndex = 0; taskIndex < tasksLength && charges > 0 && !this.stopRequested; taskIndex++) {
+            if (this.stopRequested) break;
             let minPercent = 1;
             let minImage;
             for (let imageIndex = 0; imageIndex < this.images.length; imageIndex++) {
@@ -3865,11 +4066,11 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
           break;
         }
         case "SEQUENTIAL" /* SEQUENTIAL */: {
-          for (let imageIndex = 0; imageIndex < this.images.length; imageIndex++) {
+          for (let imageIndex = 0; imageIndex < this.images.length && !this.stopRequested; imageIndex++) {
             const image = this.images[imageIndex];
             if (image.disabled)
               continue;
-            for (let i = 0; i < image.tasks.length / 2 && charges > 0; i++)
+            for (let i = 0; i < image.tasks.length / 2 && charges > 0 && !this.stopRequested; i++)
               await drawTask(image);
           }
         }
@@ -3877,13 +4078,21 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       for (const [image, value] of indexes)
         image.tasks = image.tasks.subarray(value * 2);
       this.widget.update();
-      if (initialZoom < 4) {
+      if (!this.stopRequested && initialZoom && !isNaN(initialZoom) && initialZoom < 4) {
         await this.zoomOut(initialZoom, $canvas);
       }
     }, () => {
       globalThis.removeEventListener("mousemove", prevent, true);
       $canvas.removeEventListener("wheel", prevent, true);
+      const wasStopped = this.stopRequested;
+      this.isDrawing = false;
+      this.stopRequested = false;
+      this.widget.$draw.innerText = "Disegna";
+      removeClass(this.widget.$draw, "drawing");
       this.widget.setDisabled("draw", false);
+      if (wasStopped) {
+        this.widget.status = "🛑 Disegno interrotto";
+      }
     });
   }
   autoDraw() {
@@ -3915,7 +4124,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
         }
         try {
           await this.draw();
-          document.querySelector(".absolute.bottom-0  .btn.btn-lg.relative.btn-primary")?.click();
+          this.getPaintButton()?.click();
           errorCount = 0;
         } catch {
           errorCount++;
@@ -3931,6 +4140,7 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       version: SAVE_VERSION,
       images: await Promise.all(this.images.map((x) => x.toJSON())),
       strategy: this.strategy,
+      drawSpeed: this.drawSpeed,
       title: this.title,
       autoUpgradeCooldown: this.autoUpgradeCooldown,
       autoUpgradeStorage: this.autoUpgradeStorage,
@@ -3942,9 +4152,12 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
   async updateColorsData() {
     await this.openColors();
     this.unavailableColors.clear();
-    for (const $button of document.querySelectorAll("button.btn.relative.w-full"))
+    for (const $button of document.querySelectorAll("button.btn.relative.w-full, button.game-color-swatch")) {
+      const colorId = Math.abs(Number.parseInt($button.id.slice(6)));
+      if (colorId === 0 || isNaN(colorId)) continue;
       if ($button.children.length !== 0)
-        this.unavailableColors.add(Math.abs(Number.parseInt($button.id.slice(6))));
+        this.unavailableColors.add(colorId);
+    }
   }
   moveMap(delta) {
     const canvas = document.querySelector(".maplibregl-canvas");
@@ -3999,11 +4212,12 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
   }
   async openColors() {
     this.lastColor = undefined;
-    // Disabilitato perché il gioco ha cambiato UI e questo bottone ora è il "Trova la mia posizione (GPS)"
-    // document.querySelector(".flex.gap-2.px-3 > .btn-circle")?.click();
     await wait(1);
-    document.querySelector(".btn.btn-primary.btn-lg.relative.z-30")?.click();
-    await wait(1);
+    const isPaletteOpen = !!document.querySelector(".game-color-swatch, .paint-swatch, #color-0");
+    if (!isPaletteOpen) {
+      this.getPaintButton()?.click();
+      await wait(50);
+    }
     const unfoldColors = document.querySelector("button.bottom-0");
     if (unfoldColors?.innerHTML === '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -960 960 960" fill="currentColor" class="size-5"><path d="M480-120 300-300l58-58 122 122 122-122 58 58-180 180ZM358-598l-58-58 180-180 180 180-58 58-122-122-122 122Z"></path></svg><!---->') {
       unfoldColors.click();
@@ -4018,20 +4232,32 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       }
     }
   }
-  waitForElement(selector) {
+  getPaintButton() {
+    return document.querySelector(".paint-button-content")?.closest("button") ||
+      document.querySelector("button.btn-primary.btn-lg, button.btn-primary, div.bottom-safe-min-3 button");
+  }
+  waitForElement(selector, timeout = 7000) {
     return new Promise((resolve) => {
       const existing = document.querySelector(selector);
       if (existing) {
         resolve(existing);
         return;
       }
+      let timer;
       const observer = new MutationObserver(() => {
         const element = document.querySelector(selector);
         if (element) {
+          if (timer) clearTimeout(timer);
           observer.disconnect();
           resolve(element);
         }
       });
+      if (timeout > 0) {
+        timer = setTimeout(() => {
+          observer.disconnect();
+          resolve(document.querySelector(selector));
+        }, timeout);
+      }
       observer.observe(document.documentElement, {
         childList: true,
         subtree: true
@@ -4040,12 +4266,15 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
   }
   updateStars() {
     this.$stars = [
-      ...document.querySelectorAll(".text-yellow-400.cursor-pointer.z-10.maplibregl-marker.maplibregl-marker-anchor-center")
+      ...document.querySelectorAll(".maplibregl-marker")
     ].slice(0, FAVORITE_LOCATIONS.length);
   }
-  async zoomIn(zoom, canvas = document.querySelector(".maplibregl-canvas")) {
+  async zoomIn(zoom = 4, canvas = document.querySelector(".maplibregl-canvas")) {
+    if (!canvas || !this.images[0]?.position)
+      return;
     const position = this.images[0].position;
-    if (position.pixelSize >= zoom)
+    const ps = position.pixelSize;
+    if (isNaN(ps) || ps >= zoom)
       return;
     const event = new WheelEvent("wheel", {
       deltaY: -200,
@@ -4055,19 +4284,34 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       shiftKey: true
     });
     return new Promise((resolve) => {
+      let attempts = 0;
+      let lastPixelSize = position.pixelSize;
+      let unchangedCount = 0;
       function scroll() {
-        if (position.pixelSize >= zoom)
+        attempts++;
+        const currPs = position.pixelSize;
+        if (isNaN(currPs) || currPs >= zoom || attempts >= 15 || unchangedCount >= 3) {
           resolve();
-        else
-          setTimeout(scroll, 100);
+          return;
+        }
+        if (Math.abs(currPs - lastPixelSize) < 0.001) {
+          unchangedCount++;
+        } else {
+          unchangedCount = 0;
+          lastPixelSize = currPs;
+        }
         canvas.dispatchEvent(event);
+        setTimeout(scroll, 100);
       }
       scroll();
     });
   }
   async zoomOut(zoom, canvas = document.querySelector(".maplibregl-canvas")) {
+    if (!canvas || !this.images[0]?.position || !zoom)
+      return;
     const position = this.images[0].position;
-    if (position.pixelSize <= zoom)
+    const ps = position.pixelSize;
+    if (isNaN(ps) || ps <= zoom)
       return;
     const event = new WheelEvent("wheel", {
       deltaY: 200,
@@ -4077,12 +4321,24 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
       shiftKey: true
     });
     return new Promise((resolve) => {
+      let attempts = 0;
+      let lastPixelSize = position.pixelSize;
+      let unchangedCount = 0;
       function scroll() {
-        if (position.pixelSize <= zoom)
+        attempts++;
+        const currPs = position.pixelSize;
+        if (isNaN(currPs) || currPs <= zoom || attempts >= 15 || unchangedCount >= 3) {
           resolve();
-        else
-          setTimeout(scroll, 100);
+          return;
+        }
+        if (Math.abs(currPs - lastPixelSize) < 0.001) {
+          unchangedCount++;
+        } else {
+          unchangedCount = 0;
+          lastPixelSize = currPs;
+        }
         canvas.dispatchEvent(event);
+        setTimeout(scroll, 100);
       }
       scroll();
     });
@@ -4119,3 +4375,4 @@ Lo sviluppatore cercherà di sistemare il tuo salvataggio. Fai attenzione che le
 loadSave().then(save => {
   globalThis.wbot = new WPlaceBot(save);
 });
+

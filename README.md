@@ -5,9 +5,13 @@ Uno script completo per **Tampermonkey** progettato per automatizzare la creazio
 
 ## ✨ Funzionalità Principali
 
+* ⚡ **Controllo della Velocità**: Puoi scegliere la velocità di piazzamento pixel dalle impostazioni (Normale ~3 px/s, Veloce ~8 px/s, Molto Veloce ~15 px/s, Turbo / Istantaneo ~40 px/s).
+* ⏹️ **Pulsante Stop Dedicato**: Possibilità di fermare istantaneamente il disegno in corso premendo il pulsante Stop (`⏹ Stop`).
+* 🏁 **Cancellazione con Trasparente**: Opzione per cancellare con il colore trasparente i pixel disegnati sulla mappa attorno al tuo disegno, disegnando prima in priorità assoluta tutti i colori del tuo logo.
+* 👁️ **Nascondi / Mostra Immagine**: Toggle per nascondere temporaneamente l'immagine overlay e controllare i progressi reali sulla mappa.
 * 📦 **Importa / Esporta Setup**: Puoi esportare la tua configurazione e le coordinate dell'immagine con un click. Questo ti permette di condividere il progetto con i tuoi amici o di clonarlo su più profili Chrome per avviare sessioni di **Multi-Account** coordinate!
 * 🛒 **Auto-Upgrade Intelligente (Farming)**: Il bot monitora i tuoi soldi (Droplets) e acquista in totale autonomia i potenziamenti del Cooldown e dello Storage non appena raggiungi 500 droplets. (Supporta nativamente l'interfaccia in lingua Inglese e Italiana).
-* 🎛️ **Strategie di Disegno Multiple**: Modalità di piazzamento pixel dall'alto al basso, spirale, sinistra a destra o casuale. (Perfetto per distribuire il carico su Multi-Account).
+* 🎛️ **Strategie di Disegno Multiple**: Modalità di piazzamento pixel dall'alto al basso, spirale verso il centro, dal basso all'alto, bordi verso il centro o casuale. (Perfetto per distribuire il carico su Multi-Account).
 
 ## 🚀 Come Installare e Usare
 

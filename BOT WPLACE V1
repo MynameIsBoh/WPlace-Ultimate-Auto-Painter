@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         WPlace Ultimate Auto-Painter
 // @namespace    https://wplace.live
-// @version      6.10.0
+// @version      6.11.0
 // @description  Bot per automatizzare e difendere i disegni su wplace.live
 // @author       Zeus
 // @license      MIT
@@ -351,8 +351,12 @@ var image_default = `<div class="topbar">
       </select>
     </label>
     <button class="reset-size">Ripristina dimensione [<span></span>px]</button>
-    <label title="Cancella con il trasparente (colore 0) i punti della mappa dove l'immagine è trasparente (i pixel del tuo disegno NON vengono mai toccati)">
-      <input type="checkbox" class="draw-transparent" />&nbsp;Cancella sfondo mappa con trasparente
+    <label title="Cosa fare con le parti trasparenti dell'immagine (il tuo disegno viene sempre completato prima)">
+      Sfondo immagine:&nbsp;<select class="transparent-action">
+        <option value="NONE" selected>Nessuno (non toccare lo sfondo)</option>
+        <option value="TRANSPARENT">Cancella mappa con Trasparente</option>
+        <option value="WHITE">Colora sfondo con Bianco</option>
+      </select>
     </label>
     <label>
       <input type="checkbox" class="draw-colors-in-order" />&nbsp;Disegna i colori in ordine
@@ -479,6 +483,7 @@ function migrateImage(old) {
       strategy: old.strategy || "SPIRAL_TO_CENTER",
       opacity: old.opacity ?? 1,
       drawTransparentPixels: old.drawTransparentPixels ?? false,
+      transparentAction: old.transparentAction || (old.drawTransparentPixels ? "TRANSPARENT" : "NONE"),
       drawTransparentOnDrawn: old.drawTransparentOnDrawn ?? false,
       transparentDrawnTarget: old.transparentDrawnTarget || "ALL",
       drawColorsInOrder: old.drawColorsInOrder ?? false,
@@ -803,9 +808,9 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
       globalX,
       globalY,
       drawTransparentPixels,
-      drawTransparentOnDrawn,
-      transparentDrawnTarget
+      transparentAction
     } = request;
+    const tAction = transparentAction || (drawTransparentPixels ? "TRANSPARENT" : "NONE");
     let lastProgress = 0;
     let scaled;
     if (nativeWidth === width && nativeHeight === height)
@@ -858,8 +863,21 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
         const key = r << 16 | g << 8 | b;
         let min;
         let minReal;
-        if (a < 100)
+        if (a < 100) {
           min = minReal = 0;
+          if (tAction === "WHITE") {
+            const wStat = colorStat.get(5);
+            if (wStat)
+              wStat.amount++;
+            else
+              colorStat.set(5, {
+                color: 5,
+                amount: 1,
+                left: 0,
+                realColor: 5
+              });
+          }
+        }
         else if (colorCache.has(key))
           [min, minReal] = colorCache.get(key);
         else {
@@ -936,16 +954,31 @@ var worker = new Worker(URL.createObjectURL(new Blob([`(() => {
           realColor
         });
       } else {
-        // Pixel trasparente dell'immagine: cancella con trasparente solo se sulla mappa c'è un pixel disegnato
-        if (mapColor !== 0 && drawTransparentPixels) {
-          const stat = colorStat.get(0);
-          if (stat) stat.left++;
-          transparentTasks.push({
-            gx,
-            gy,
-            color: 0,
-            realColor: 0
-          });
+        // Pixel di sfondo / trasparente dell'immagine
+        if (tAction === "WHITE") {
+          if (mapColor !== 5) {
+            const stat = colorStat.get(5);
+            if (stat) stat.left++;
+            if (!skipColors.has(5)) {
+              transparentTasks.push({
+                gx,
+                gy,
+                color: 5,
+                realColor: 5
+              });
+            }
+          }
+        } else if (tAction === "TRANSPARENT") {
+          if (mapColor !== 0) {
+            const stat = colorStat.get(0);
+            if (stat) stat.left++;
+            transparentTasks.push({
+              gx,
+              gy,
+              color: 0,
+              realColor: 0
+            });
+          }
         }
       }
     }
@@ -1365,6 +1398,7 @@ class BotImage extends Base2 {
   strategy;
   opacity;
   drawTransparentPixels;
+  transparentAction;
   drawTransparentOnDrawn;
   transparentDrawnTarget;
   drawColorsInOrder;
@@ -1382,7 +1416,7 @@ class BotImage extends Base2 {
     const ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(image, 0, 0);
-    const botImage = new BotImage(bot, data.position ? WorldPosition.fromJSON(bot, data.position) : undefined, canvas, data.width, data.brightness, data.strategy, data.opacity, data.drawTransparentPixels, data.drawColorsInOrder, data.colors, new Set(data.disabledColors), data.lock, data.disabled, data.name, data.unownedColorStrategy);
+    const botImage = new BotImage(bot, data.position ? WorldPosition.fromJSON(bot, data.position) : undefined, canvas, data.width, data.brightness, data.strategy, data.opacity, data.drawTransparentPixels, data.drawColorsInOrder, data.colors, new Set(data.disabledColors), data.lock, data.disabled, data.name, data.unownedColorStrategy, data.transparentAction);
     await botImage.updatePixels(progress);
     return botImage;
   }
@@ -1405,7 +1439,7 @@ class BotImage extends Base2 {
   $colors;
   $delete;
   $drawColorsInOrder;
-  $drawTransparent;
+  $transparentAction;
   $export;
   $visibility;
   $lock;
@@ -1426,7 +1460,7 @@ class BotImage extends Base2 {
   constructor(bot, position = WorldPosition.fromScreenPosition(bot, {
     x: 256,
     y: 32
-  }), image, width = image.width, brightness = 0, strategy = "SPIRAL_TO_CENTER" /* SPIRAL_TO_CENTER */, opacity = 50, drawTransparentPixels = false, drawColorsInOrder = true, colors = [], disabledColors = new Set, lock = false, disabled = false, name = `${image.width}x${image.height}`, unownedColorStrategy = "BUY" /* BUY */) {
+  }), image, width = image.width, brightness = 0, strategy = "SPIRAL_TO_CENTER" /* SPIRAL_TO_CENTER */, opacity = 50, drawTransparentPixels = false, drawColorsInOrder = true, colors = [], disabledColors = new Set, lock = false, disabled = false, name = `${image.width}x${image.height}`, unownedColorStrategy = "BUY" /* BUY */, transparentAction = undefined) {
     super();
     this.bot = bot;
     this.position = position;
@@ -1436,6 +1470,7 @@ class BotImage extends Base2 {
     this.strategy = strategy;
     this.opacity = opacity;
     this.drawTransparentPixels = drawTransparentPixels;
+    this.transparentAction = transparentAction || (drawTransparentPixels ? "TRANSPARENT" : "NONE");
     this.drawColorsInOrder = drawColorsInOrder;
     this.colors = colors;
     this.disabledColors = disabledColors;
@@ -1455,7 +1490,7 @@ class BotImage extends Base2 {
       $colors: ".colors",
       $delete: ".delete",
       $drawColorsInOrder: ".draw-colors-in-order",
-      $drawTransparent: ".draw-transparent",
+      $transparentAction: ".transparent-action",
       $export: ".export",
       $visibility: ".visibility",
       $lock: ".lock",
@@ -1513,11 +1548,14 @@ class BotImage extends Base2 {
       await this.updatePixels();
       await save(this.bot);
     });
-    this.$drawTransparent.addEventListener("click", async () => {
-      this.drawTransparentPixels = this.$drawTransparent.checked;
-      await this.updatePixels();
-      save(this.bot);
-    });
+    if (this.$transparentAction) {
+      this.$transparentAction.addEventListener("change", async () => {
+        this.transparentAction = this.$transparentAction.value;
+        this.drawTransparentPixels = this.transparentAction === "TRANSPARENT";
+        await this.updatePixels();
+        save(this.bot);
+      });
+    }
     this.$drawColorsInOrder.addEventListener("click", () => {
       this.drawColorsInOrder = this.$drawColorsInOrder.checked;
       this.updateColors();
@@ -1577,6 +1615,7 @@ class BotImage extends Base2 {
       strategy: this.strategy,
       opacity: this.opacity,
       drawTransparentPixels: this.drawTransparentPixels,
+      transparentAction: this.transparentAction,
       drawColorsInOrder: this.drawColorsInOrder,
       colors: this.colors,
       disabledColors: Array.from(this.disabledColors),
@@ -1600,6 +1639,7 @@ class BotImage extends Base2 {
       disabledColors: this.disabledColors,
       drawColorsInOrder: this.drawColorsInOrder,
       drawTransparentPixels: this.drawTransparentPixels,
+      transparentAction: this.transparentAction,
       globalX: this.position.globalX,
       globalY: this.position.globalY,
       height,
@@ -1646,7 +1686,8 @@ class BotImage extends Base2 {
     this.$brightness.valueAsNumber = this.brightness;
     this.$strategy.value = this.strategy;
     this.$opacity.valueAsNumber = this.opacity;
-    this.$drawTransparent.checked = this.drawTransparentPixels;
+    if (this.$transparentAction)
+      this.$transparentAction.value = this.transparentAction || "NONE";
     this.$drawColorsInOrder.checked = this.drawColorsInOrder;
     this.$name.value = this.name;
     const maxTasks = this.width * this.height;
@@ -1674,11 +1715,11 @@ class BotImage extends Base2 {
     this.$colors.innerHTML = "";
     let pixelsSum = 0;
     for (const stat of this.colorsStat.values())
-      if (this.drawTransparentPixels || stat.realColor !== 0)
+      if (this.transparentAction === "TRANSPARENT" || stat.realColor !== 0)
         pixelsSum += stat.amount;
     if (this.colors.length !== this.colorsStat.size || this.colors.some((x) => !this.colorsStat.has(x))) {
       const nonZero = this.colorsStat.values().toArray().filter((x) => x.realColor !== 0).sort((a, b) => b.amount - a.amount).map((color) => color.realColor);
-      if (this.colorsStat.has(0))
+      if (this.colorsStat.has(0) && this.transparentAction === "TRANSPARENT")
         nonZero.push(0);
       this.colors = nonZero;
       save(this.bot);
@@ -1686,10 +1727,12 @@ class BotImage extends Base2 {
     this.$colors.style.height = `${LINE_HEIGHT * this.colors.length}px`;
     for (let index = 0; index < this.colors.length; index++) {
       const drawColor = this.colors[index];
-      if (!this.drawTransparentPixels && drawColor === 0)
+      if (this.transparentAction !== "TRANSPARENT" && drawColor === 0)
         continue;
       const css = (color) => color === 0 ? `repeating-linear-gradient(32deg, #ccc 0 8px, transparent 8px 16px)` : colorToCSS(color);
       const colorStat = this.colorsStat.get(drawColor);
+      if (!colorStat)
+        continue;
       const $button = document.createElement("button");
       if (COLORS[drawColor][0] < 0.6)
         addClass($button, "dark");
@@ -3903,7 +3946,9 @@ Vuoi cancellare i dati locali salvati per ripristinare il bot?
           return false;
         indexes.set(image, index + 1);
         const worldPosition = new WorldPosition(this, image.tasks[dIndex], image.tasks[dIndex + 1]);
-        const color = image.pixels[(worldPosition.globalY - image.position.globalY) * image.width + (worldPosition.globalX - image.position.globalX)];
+        let color = image.pixels[(worldPosition.globalY - image.position.globalY) * image.width + (worldPosition.globalX - image.position.globalX)];
+        if (color === 0 && image.transparentAction === "WHITE")
+          color = 5;
         if (this.lastColor !== color) {
           let colorBtn = document.getElementById("color-" + color);
           if (!colorBtn && color === 0) {
